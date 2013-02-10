@@ -65,5 +65,13 @@ Usage
 =====
 
     $ livedev -c config.json
+    
+Assuming you used the above configuration and added `example.com` to your host file,
+point your browser to [http://example.com](http://example.com)  
+livedev will start your app, compiling it if necessary and foward the request to
+it on the configured port.
+
+You can have multiple app running with different hostname and port number
+
 
 
