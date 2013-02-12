@@ -43,7 +43,7 @@ func (b *Builder) Build(target string, source []string, output string) error {
 					lines = append(lines, line)
 				}
 			}
-			return errors.New(strings.Join(lines, "\n"))
+			return errors.New(strings.Join(lines, ""))
 		}
 
 		return err

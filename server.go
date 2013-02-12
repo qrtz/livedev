@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -12,7 +10,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -97,23 +94,8 @@ func (srv *Server) Stop() (err error) {
 func (srv *Server) monitor() {
 	defer close(srv.closed)
 	if out, err := srv.cmd.CombinedOutput(); err != nil {
-		var lines []string
 		if len(out) > 0 {
-			r := bufio.NewReader(bytes.NewReader(out))
-		done:
-			for {
-				line, err := r.ReadString('\n')
-				switch {
-				case err != nil:
-					break done
-				default:
-					lines = append(lines, line)
-				}
-			}
-			log.Println(strings.Join(lines, "\n"))
-		}
-		if len(lines) > 0 {
-			srv.state = errors.New(strings.Join(lines, "\n"))
+			srv.state = errors.New(string(out))
 		} else {
 			srv.state = err
 		}
