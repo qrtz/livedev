@@ -189,7 +189,7 @@ func (srv *Server) BuildAndRun() error {
 		buildFileTime, appFileTime = bt, at
 	}
 
-	rebuild := buildFileTime.After(binModTime)
+	rebuild := len(srv.target) > 0 && buildFileTime.After(binModTime)
 	restart := rebuild || binModTime.After(srv.startTime) || appFileTime.After(srv.startTime)
 
 	if !restart {
