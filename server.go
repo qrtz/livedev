@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,6 +45,7 @@ type Server struct {
 	addr      string
 	skip      *regexp.Regexp
 	closed    chan struct{}
+	state     error
 }
 
 func NewServer(bin string) (*Server, error) {
@@ -62,6 +66,9 @@ func (srv *Server) wait(timeout time.Duration) error {
 		case <-c:
 			return E_TIMEOUT
 		default:
+			if srv.state != nil {
+				return srv.state
+			}
 			response, err := http.Head(url)
 
 			if err == nil {
@@ -89,8 +96,27 @@ func (srv *Server) Stop() (err error) {
 
 func (srv *Server) monitor() {
 	defer close(srv.closed)
-	if err := srv.cmd.Wait(); err != nil {
-		log.Println(err)
+	if out, err := srv.cmd.CombinedOutput(); err != nil {
+		var lines []string
+		if len(out) > 0 {
+			r := bufio.NewReader(bytes.NewReader(out))
+		done:
+			for {
+				line, err := r.ReadString('\n')
+				switch {
+				case err != nil:
+					break done
+				default:
+					lines = append(lines, line)
+				}
+			}
+			log.Println(strings.Join(lines, "\n"))
+		}
+		if len(lines) > 0 {
+			srv.state = errors.New(strings.Join(lines, "\n"))
+		} else {
+			srv.state = err
+		}
 	}
 
 	srv.cmd = nil
@@ -133,12 +159,8 @@ func (srv *Server) Start() error {
 		args = append(args, "--addr", srv.addr)
 	}
 
+	srv.state = nil
 	srv.cmd = exec.Command(srv.bin, args...)
-
-	if err := srv.cmd.Start(); err != nil {
-		return err
-	}
-
 	srv.startTime = time.Now()
 	srv.closed = make(chan struct{})
 	go srv.monitor()
@@ -190,7 +212,7 @@ func (srv *Server) BuildAndRun() error {
 	}
 
 	rebuild := len(srv.target) > 0 && buildFileTime.After(binModTime)
-	restart := rebuild || binModTime.After(srv.startTime) || appFileTime.After(srv.startTime)
+	restart := rebuild || srv.cmd == nil || binModTime.After(srv.startTime) || appFileTime.After(srv.startTime)
 
 	if !restart {
 		return nil
