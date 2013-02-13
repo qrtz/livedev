@@ -45,7 +45,7 @@ livedev is controlled by a json configuration file:
  
 ### Example:
 
-    `{
+    {
         "port":80,
         "server":[
             {
@@ -53,13 +53,13 @@ livedev is controlled by a json configuration file:
                 "host":"example.com",
                 "port": 8080,
                 "target":"/projects/example/src/main.go",
-                "source":"/projects/expemple",
+                "source":["/projects/expemple"],
                 "bin":"/projects/example/bin/example",
-                "startup":['-res', '/path/to/resource/directory'],
+                "startup":["-res", "/path/to/resource/directory"],
                 "default":true
             }
         ]
-    }`
+    }
 
 
 Usage
