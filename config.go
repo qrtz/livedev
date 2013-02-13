@@ -18,7 +18,7 @@ type ServerConf struct {
 }
 
 type Config struct {
-	Port   int          `json:"addr"` //proxy port
+	Port   int          `json:"port"` //proxy port
 	GOROOT string       `json:"GOROOT"`
 	GOPATH string       `json:"GOPATH"`
 	Server []ServerConf `json:"server"`
