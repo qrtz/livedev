@@ -32,16 +32,16 @@ func TraverseList(paths []string, visit FileVisitorFunc) error {
 	return nil
 }
 
-func readdir(path string) ([]string, error) {
+func readdir(path string) ([]os.FileInfo, error) {
 	f, err := os.Open(path)
 
 	if err != nil {
-		return []string{}, err
+		return nil, err
 	}
-	
+
 	defer f.Close()
 
-	return f.Readdirnames(-1)
+	return f.Readdir(-1)
 }
 
 func Traverse(path string, visit FileVisitorFunc) error {
@@ -68,21 +68,12 @@ func Traverse(path string, visit FileVisitorFunc) error {
 			return err
 		}
 
-		names, err := readdir(current.Path)
-
-		if err != nil {
+		if infos, err := readdir(current.Path); err != nil {
 			return err
-		}
+		} else {
 
-		for _, name := range names {
-			sub := filepath.Join(current.Path, name)
-			info, err := os.Lstat(sub)
-
-			if err != nil {
-				if err := visit(sub, info, err); err != nil && err != ERR_SKIP {
-					return err
-				}
-			} else {
+			for _, info := range infos {
+				sub := filepath.Join(current.Path, info.Name())
 
 				if info.IsDir() {
 					stack = append(stack, &File{sub, info})
