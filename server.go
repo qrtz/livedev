@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"go/build"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,41 +31,95 @@ const (
 	PORT_TYPE_DYNAMIC
 )
 
+type Resource struct {
+	Ignore *regexp.Regexp
+	Paths  []string
+}
+
 type Server struct {
-	tcpAddr   *net.TCPAddr
-	startTime time.Time
-	bin       string
-	target    string
-	cmd       *exec.Cmd
-	lock      sync.Mutex
-	startup   []string
-	port      int
-	portType  PortType
-	host      string
-	source    []string
-	builder   *Builder
-	addr      string
-	skip      *regexp.Regexp
-	closed    chan struct{}
-	state     error
+	addr        string
+	bin         string
+	builder     []string
+	closed      chan struct{}
+	cmd         *exec.Cmd
+	context     build.Context
+	dep         []string
+	host        string
+	lock        sync.Mutex
+	port        int
+	portType    PortType
+	requestTime time.Time
+	resources   *Resource
+	startup     []string
+	startTime   time.Time
+	state       error
+	target      string
+	tcpAddr     *net.TCPAddr
 }
 
-func NewServer(bin string) (*Server, error) {
-	p := new(Server)
-	p.bin = bin
-	return p, nil
-}
-
-func (srv *Server) wait(timeout time.Duration) error {
+func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	var (
-		c         = time.After(timeout)
+		srv    = new(Server)
+		ignore *regexp.Regexp
+		paths  []string
+	)
+	
+	if len(s.Resources.Paths) > 0 {
+		for _, s := range s.Resources.Paths {
+			if p := strings.TrimSpace(s); len(p) > 0 {
+				paths = append(paths, p)
+			}
+		}
+
+		if len(paths) > 0 {
+			if s := strings.TrimSpace(s.Resources.Ignore); len(s) > 0 {
+				if pattern, err := regexp.Compile(s); err == nil {
+					ignore = pattern
+				} else {
+					return nil, fmt.Errorf(`Fatal error: Invalid pattern "%s" : %v`, s, err)
+				}
+			}
+
+			srv.resources = &Resource{ignore, paths}
+		}
+	}
+
+	srv.target = strings.TrimSpace(s.Target)
+	srv.bin = strings.TrimSpace(s.Bin)
+	srv.builder = s.Builder
+
+	if !hasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
+		//Target is not in the $GOPATH
+		//Try to guess the import root(workspace) from the path
+		roots := ImportRoots(srv.target)
+
+		if len(roots) > 0 {
+			context.GOPATH = strings.Join(append(roots, context.GOPATH), string(filepath.ListSeparator))
+		}
+	}
+
+	srv.context = context
+
+	if len(srv.builder) == 0 {
+		cmd := filepath.Join(context.GOROOT, "bin", "go")
+		srv.builder = append(srv.builder, cmd, "build", "-o", srv.bin, srv.target)
+	}
+
+	srv.port = s.Port
+	srv.startup = s.Startup
+	srv.host = s.Host
+	return srv, nil
+}
+
+func (srv *Server) wait(timeout <-chan time.Time) error {
+	var (
 		lastError error
 	)
 	url := fmt.Sprintf("http://%s/", srv.addr)
 
 	for {
 		select {
-		case <-c:
+		case <-timeout:
 			return E_TIMEOUT
 		default:
 			if srv.state != nil {
@@ -146,17 +205,59 @@ func (srv *Server) Start() error {
 	srv.startTime = time.Now()
 	srv.closed = make(chan struct{})
 	go srv.monitor()
-	return srv.wait(30 * time.Second)
+	return srv.wait(time.After(30 * time.Second))
 }
 
 func (srv *Server) build() error {
 	log.Printf("Building...%s", srv.host)
-	return srv.builder.Build(srv.target, srv.source, srv.bin)
+	//Reset the dependency list.
+	srv.dep = srv.dep[0:0]
+
+	env := NewEnv(os.Environ())
+	env.Set(KEY_GOPATH, srv.context.GOPATH)
+
+	var (
+		command string
+		args    []string
+	)
+
+	command, args = srv.builder[0], srv.builder[1:]
+
+	cmd := exec.Command(command, args...)
+	cmd.Env = env.Data()
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if len(out) > 0 {
+			r := bufio.NewReader(bytes.NewReader(out))
+			var lines []string
+		done:
+			for {
+				line, err := r.ReadString('\n')
+				switch {
+				case err != nil:
+					break done
+				case !strings.HasPrefix(line, "#"):
+					lines = append(lines, line)
+				}
+			}
+			return errors.New(strings.Join(lines, ""))
+		}
+
+		return err
+	}
+
+	return nil
+
 }
 
 func (srv *Server) BuildAndRun() error {
+	requestTime := time.Now()
 	srv.lock.Lock()
-	defer srv.lock.Unlock()
+
+	defer func() {
+		srv.requestTime = time.Now()
+		srv.lock.Unlock()
+	}()
 
 	if len(srv.bin) == 0 {
 		if srv.port == 0 {
@@ -171,30 +272,54 @@ func (srv *Server) BuildAndRun() error {
 			srv.tcpAddr = a
 
 		}
-		return E_PROXY_ONLY
+		//PROXY ONLY
+		return nil
+	}
+
+	//Ignore if the request is within less than 3 seconds of the last one.
+	//This is an arbitrary number. We can certainly increase this.
+	if requestTime.Sub(srv.requestTime) < (3 * time.Second) {
+		return nil
 	}
 
 	var (
-		binModTime,
-		buildFileTime,
-		appFileTime time.Time
+		binModTime time.Time
+		restart    = srv.cmd == nil
+		rebuild    bool
 	)
 
 	if stat, err := os.Stat(srv.bin); err == nil {
 		binModTime = stat.ModTime()
+		if !restart {
+			restart = binModTime.After(srv.startTime)
+		}
 	}
 
-	if len(srv.source) > 0 {
-		bt, at, err := ModTimeList(srv.source, srv.skip)
+	if len(srv.target) > 0 && len(srv.dep) == 0 {
+		dep, err := ComputeDep(&srv.context, srv.target)
 		if err != nil {
 			return err
 		}
-
-		buildFileTime, appFileTime = bt, at
+		srv.dep = dep
 	}
 
-	rebuild := len(srv.target) > 0 && buildFileTime.After(binModTime)
-	restart := rebuild || srv.cmd == nil || binModTime.After(srv.startTime) || appFileTime.After(srv.startTime)
+	mtime, err := ModTimeList(srv.dep, nil)
+
+	if err != nil {
+		return err
+	}
+
+	rebuild = mtime.After(binModTime)
+	restart = restart || rebuild
+
+	if !restart && srv.resources != nil {
+		mtime, err := ModTimeList(srv.resources.Paths, srv.resources.Ignore)
+
+		if err != nil {
+			return err
+		}
+		restart = mtime.After(srv.startTime)
+	}
 
 	if !restart {
 		return nil

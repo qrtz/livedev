@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,17 +20,6 @@ type File struct {
 }
 
 type FileVisitorFunc func(string, os.FileInfo, error) error
-
-//TODO: Concurrency
-func TraverseList(paths []string, visit FileVisitorFunc) error {
-	for _, p := range paths {
-		if err := Traverse(p, visit); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
 
 func readdir(path string) ([]os.FileInfo, error) {
 	f, err := os.Open(path)
@@ -89,40 +78,91 @@ func Traverse(path string, visit FileVisitorFunc) error {
 	return nil
 }
 
-func ModTimeList(dirs []string, skip *regexp.Regexp) (buildFileTime, appFileTime time.Time, err error) {
-	for _, d := range dirs {
-		b, a, e := ModTime(d, skip)
-		if e != nil {
-			err = e
+type Done struct {
+	Path  string
+	mtime time.Time
+	Err   error
+}
+
+func ModTimeList(paths []string, skip *regexp.Regexp) (mtime time.Time, err error) {
+	wg := new(sync.WaitGroup)
+	ln := 8
+
+	if n := len(paths); n < ln {
+		ln = n
+	}
+
+	ch := make(chan Done, ln)
+
+	for _, p := range paths {
+		wg.Add(1)
+		go func(c chan Done, path string, skip *regexp.Regexp) {
+			defer wg.Done()
+			mt, err := ModTime(path, skip)
+			c <- Done{path, mt, err}
+		}(ch, p, skip)
+	}
+
+	go func(c chan Done, w *sync.WaitGroup) {
+		w.Wait()
+		close(c)
+	}(ch, wg)
+
+	for d := range ch {
+		if d.Err != nil && d.Err != ERR_SKIP {
+			err = d.Err
 			return
 		}
 
-		if a.After(appFileTime) {
-			appFileTime = a
-		}
-
-		if b.After(buildFileTime) {
-			buildFileTime = b
+		if d.mtime.After(mtime) {
+			mtime = d.mtime
 		}
 	}
 	return
 }
 
-func ModTime(dir string, skip *regexp.Regexp) (buildFileTime, appFileTime time.Time, err error) {
+func FileModTime(dirs []string, skip *regexp.Regexp) (mtime time.Time, err error) {
+	wg := new(sync.WaitGroup)
+	ch := make(chan Done, len(dirs))
+
+	for _, d := range dirs {
+		wg.Add(1)
+		go func(c chan Done, dir string, skip *regexp.Regexp) {
+			defer wg.Done()
+			mt, err := ModTime(dir, skip)
+			c <- Done{dir, mt, err}
+		}(ch, d, skip)
+	}
+
+	go func(c chan Done, w *sync.WaitGroup) {
+		w.Wait()
+		close(c)
+	}(ch, wg)
+
+	for d := range ch {
+		if d.Err != nil && d.Err != ERR_SKIP {
+			err = d.Err
+			return
+		}
+
+		if d.mtime.After(mtime) {
+			mtime = d.mtime
+		}
+	}
+	return
+}
+
+func ModTime(dir string, skip *regexp.Regexp) (mtime time.Time, err error) {
 	err = Traverse(dir, func(name string, info os.FileInfo, fileErr error) error {
 
-		if fileErr != nil || (skip != nil && skip.MatchString(name)) {
+		if (fileErr != nil && fileErr != ERR_NOT_DIR) || (skip != nil && skip.MatchString(name)) {
 			return ERR_SKIP
 		}
 
 		if !info.IsDir() {
 			t := info.ModTime()
-			if strings.HasSuffix(name, ".go") {
-				if t.After(buildFileTime) {
-					buildFileTime = t
-				}
-			} else if t.After(appFileTime) {
-				appFileTime = t
+			if t.After(mtime) {
+				mtime = t
 			}
 		}
 		return nil

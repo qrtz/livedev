@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strconv"
 	"net/http"
+	"strconv"
 )
 
 type Proxy struct {
-	addr       *net.TCPAddr
+	addr          *net.TCPAddr
 	port          int
 	servers       map[string]*Server
 	defaultServer *Server
@@ -28,7 +28,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if !found {
-		log.Printf("Host (%s) not found. Reverting to default\n", r.Host)
+		log.Printf("Host (%s:%v) not found. Reverting to default\n", r.Host, r)
 		srv = p.defaultServer
 	}
 
@@ -36,14 +36,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`Host not found "%s"`, r.Host), http.StatusNotFound)
 		return
 	}
-	
 
 	if err := srv.BuildAndRun(); err != nil {
-		if err != E_PROXY_ONLY {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
+		http.Error(w, fmt.Sprintf("BUILD ERROR: %s", err.Error()), http.StatusInternalServerError)
+		return
 	}
 
 	if p.addr.Port == srv.port && srv.tcpAddr.IP.IsLoopback() {
@@ -52,7 +48,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := srv.ServeHTTP(w, r); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("SERVER ERROR: %s", err.Error()), http.StatusInternalServerError)
 	}
 
 }
@@ -66,7 +62,7 @@ func (p *Proxy) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	
+
 	p.addr = addr
 
 	return http.ListenAndServe(p.addr.String(), nil)

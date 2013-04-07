@@ -16,32 +16,40 @@ Features
 * Simple json configuration file
 * Multiple server support
 * Automated build service.
+* Dependency change detection 
 
 
 Installation
 ============
 
-`go get github.com/qrtz/livedev` 
+`go get -u github.com/qrtz/livedev` 
 
 Configuration
 =============
 livedev is controlled by a json configuration file:
 
 * __port__: (int, default:"80") proxy port
-* __GOROOT__: (string, optional)
+* __GOROOT__: (string, optional) 
 * __GOPATH__: (string, optional)
 * __server__: ([]Server) A list of Server object with the following options:
- * __host__: (string, default:'localhost') server hostname (must be unique)
- * __port__: (int, default: dynamically generated) server port  
+    * __GOROOT__: (string, optional)  Server specific GOROOT for compiling with different go version
+    * __GOPATH__: ([]string, optional) Server specific GOPATH.
+    * __host__: (string, default:'localhost') server hostname (must be unique)
+    * __port__: (int, default: dynamically generated) server port  
  When omitted, the server must accept `addr=<hostname:port>` argument
- * __target__: (string, optional) Build target. The file that contains the main function.  
- When ommited, livedev will skip the build step
- * __source__: ([]string, optional) A list of source directories to watch
- * __skip__: (string, optional) skip filename pattern
- * __bin__: (string, optional) server executable file. When absent, livedev will act as proxy only
- * __startup__: ([]string, optional) server startup argument list
- * __default__: (bool, optinal) use as default server  
- The first server in the list used as default if no default is set
+    * __workspace__: (string, optional) The project root. It will be added to the build process GOPATH  
+    If omitted, an atempt will be make to guess if from __target__
+    * __target__: (string, optional) Build target. The file that contains the main function.  
+ if __target__ is not in the GOPATH, livedev will attempt to add it by guessing the workspace from the filename.  
+ When __target__ is ommited, the build step is skipped.
+    * __resources__: (optional) A list resources such as template files. Cause a server restart when chaange is made to them.
+        * __ignore__: (string, optional) filename pattern
+        * __paths__: ([]string) A list of files or directories to monitor
+    * __bin__: (string, optional) server executable file. When absent, livedev will act as proxy only
+    * __builder__: ([]string, optional) To use a builder other that default build tool. The first element is the command and the rest its arguments
+    * __startup__: ([]string, optional) server startup argument list
+    * __default__: (bool, optinal) Specifies the default server.  
+ Defaults to the first server in the list
  
 ### Example:
 
@@ -49,11 +57,13 @@ livedev is controlled by a json configuration file:
         "port":80,
         "server":[
             {
-                "skip":"static",
                 "host":"example.com",
                 "port": 8080,
                 "target":"/projects/example/src/main.go",
-                "source":["/projects/expemple"],
+                "resources":{
+                    "ignore":"static*",
+                    "paths":["/projects/expemple/templates"]
+                 },
                 "bin":"/projects/example/bin/example",
                 "startup":["-res", "/path/to/resource/directory"],
                 "default":true

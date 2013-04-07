@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"go/build"
 )
 
 type Builder struct {
@@ -19,13 +20,12 @@ func NewBuilder(bin string) *Builder {
 	return &Builder{bin: bin}
 }
 
-func (b *Builder) Build(target string, source []string, output string) error {
-	env := NewEnv(os.Environ())
 
-	//Date the source folder to the process GOPATH
-	for _, s := range source {
-		env.Add(KEY_GOPATH, s)
-	}
+func (b *Builder) Build(context build.Context, target string, output string) error {
+	env := NewEnv(os.Environ())
+	env.Set(KEY_GOPATH, context.GOPATH)
+	
+	
 	cmd := exec.Command(b.bin, "build", "-o", output, target)
 	cmd.Env = env.Data()
 

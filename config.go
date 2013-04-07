@@ -7,20 +7,28 @@ import (
 )
 
 type ServerConf struct {
-	Default bool     `json:"default"`
-	Skip    string   `json:"skip"`
-	Host    string   `json:"host"`
-	Port    int      `json:"port"`
-	Bin     string   `json:"bin"`
-	Source  []string `json:"source"`
-	Target  string   `json:"target"`
-	Startup []string `json:"startup"`
+	Default   bool         `json:"default"`
+	Host      string       `json:"host"`
+	Port      int          `json:"port"`
+	Bin       string       `json:"bin"`
+	Resources ResourceConf `json:"resource"`
+	Target    string       `json:"target"`
+	Startup   []string     `json:"startup"`
+	Builder   []string     `json:"builder"`
+	Workspace string       `json:"workspace"`
+	GOROOT    string       `json:"GOROOT"`
+	GOPATH    []string     `json:"GOPATH"`
+}
+
+type ResourceConf struct {
+	Ignore string   `json:"ignore"`
+	Paths  []string `json:"path"`
 }
 
 type Config struct {
 	Port   int          `json:"port"` //proxy port
 	GOROOT string       `json:"GOROOT"`
-	GOPATH string       `json:"GOPATH"`
+	GOPATH []string     `json:"GOPATH"`
 	Server []ServerConf `json:"server"`
 }
 
