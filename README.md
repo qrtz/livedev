@@ -79,10 +79,11 @@ Usage
     
 Assuming you used the above configuration and added `example.com` to your host file,
 point your browser to [http://example.com](http://example.com)  
-livedev will start your app, compiling it if necessary and foward the request to
+livedev will start your app, compiling it if necessary and forward the request to
 it on the configured port.
 
-You can have multiple app running with different hostname and port number
+You can have multiple app running with different hostname and port number.
+Just add another entry in the server list.
 
 
 
