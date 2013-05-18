@@ -7,7 +7,7 @@ It uses the request's header "Host" field to determine which server the request 
 If no match is found the request is routed the default server.
 
  
-It has been tested with: `go version go1.0.2`
+It has been tested with: `go version go1.0.2+`
 
 Features
 ========
