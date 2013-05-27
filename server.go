@@ -54,6 +54,7 @@ type Server struct {
 	startTime   time.Time
 	state       error
 	target      string
+	targetDir   string
 	tcpAddr     *net.TCPAddr
 }
 
@@ -63,7 +64,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 		ignore *regexp.Regexp
 		paths  []string
 	)
-	
+
 	if len(s.Resources.Paths) > 0 {
 		for _, s := range s.Resources.Paths {
 			if p := strings.TrimSpace(s); len(p) > 0 {
@@ -85,6 +86,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	}
 
 	srv.target = strings.TrimSpace(s.Target)
+	srv.targetDir = filepath.Dir(s.Target)
 	srv.bin = strings.TrimSpace(s.Bin)
 	srv.builder = s.Builder
 
@@ -102,7 +104,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 
 	if len(srv.builder) == 0 {
 		cmd := filepath.Join(context.GOROOT, "bin", "go")
-		srv.builder = append(srv.builder, cmd, "build", "-o", srv.bin, srv.target)
+		srv.builder = append(srv.builder, cmd, "build", "-o", srv.bin)
 	}
 
 	srv.port = s.Port
@@ -210,22 +212,29 @@ func (srv *Server) Start() error {
 
 func (srv *Server) build() error {
 	log.Printf("Building...%s", srv.host)
+
+	
+	//List of file to pass to "go build"
+	var buildFiles []string
+	
+	for _, f := range srv.dep {
+		if strings.HasPrefix(f, srv.targetDir) {
+			buildFiles = append(buildFiles, filepath.Base(f))
+		}
+	}
+
 	//Reset the dependency list.
-	srv.dep = srv.dep[0:0]
 
 	env := NewEnv(os.Environ())
 	env.Set(KEY_GOPATH, srv.context.GOPATH)
 
-	var (
-		command string
-		args    []string
-	)
-
-	command, args = srv.builder[0], srv.builder[1:]
-
+	command, args := srv.builder[0], srv.builder[1:]
+	
+	args = append(args, buildFiles...)
 	cmd := exec.Command(command, args...)
 	cmd.Env = env.Data()
-
+	cmd.Dir = srv.targetDir
+	
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) > 0 {
 			r := bufio.NewReader(bytes.NewReader(out))
@@ -246,6 +255,7 @@ func (srv *Server) build() error {
 		return err
 	}
 
+	srv.dep = nil
 	return nil
 
 }
@@ -290,6 +300,7 @@ func (srv *Server) BuildAndRun() error {
 
 	if stat, err := os.Stat(srv.bin); err == nil {
 		binModTime = stat.ModTime()
+
 		if !restart {
 			restart = binModTime.After(srv.startTime)
 		}
@@ -311,6 +322,7 @@ func (srv *Server) BuildAndRun() error {
 
 	rebuild = mtime.After(binModTime)
 	restart = restart || rebuild
+
 
 	if !restart && srv.resources != nil {
 		mtime, err := ModTimeList(srv.resources.Paths, srv.resources.Ignore)
@@ -353,7 +365,6 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 		r.URL.Scheme = "http"
 	}
 
-	log.Println(r.RemoteAddr, r.URL, srv.host)
 	response, err := transport.RoundTrip(r)
 
 	if err != nil {

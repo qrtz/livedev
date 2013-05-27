@@ -28,7 +28,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if !found {
-		log.Printf("Host (%s:%v) not found. Reverting to default\n", r.Host, r)
+		log.Printf("Host (%s:%v) not found. Reverting to default\n", r.Host, r.URL.String())
 		srv = p.defaultServer
 	}
 

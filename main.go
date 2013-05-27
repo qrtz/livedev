@@ -67,6 +67,10 @@ func main() {
 			s.GOROOT = GOROOT
 		}
 		
+		if len(s.GOPATH) == 0 {
+			s.GOPATH = GOPATH
+		}
+		
 		s.Workspace = strings.TrimSpace(s.Workspace)
 		
 		if len(s.Workspace) > 0 {
@@ -75,12 +79,7 @@ func main() {
 		
 		context.GOROOT = s.GOROOT
 
-		if len(s.GOPATH) == 0 {
-			s.GOPATH = GOPATH
-		}
-
 		context.GOPATH = strings.Join(s.GOPATH, string(filepath.ListSeparator))
-
 		s.Host = strings.TrimSpace(s.Host)
 
 		if len(s.Host) == 0 {

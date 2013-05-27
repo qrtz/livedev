@@ -11,7 +11,7 @@ type ServerConf struct {
 	Host      string       `json:"host"`
 	Port      int          `json:"port"`
 	Bin       string       `json:"bin"`
-	Resources ResourceConf `json:"resource"`
+	Resources ResourceConf `json:"resources"`
 	Target    string       `json:"target"`
 	Startup   []string     `json:"startup"`
 	Builder   []string     `json:"builder"`
@@ -22,7 +22,7 @@ type ServerConf struct {
 
 type ResourceConf struct {
 	Ignore string   `json:"ignore"`
-	Paths  []string `json:"path"`
+	Paths  []string `json:"paths"`
 }
 
 type Config struct {
