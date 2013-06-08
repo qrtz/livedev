@@ -147,6 +147,9 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 func (srv *Server) Stop() (err error) {
 	if srv.cmd != nil && srv.cmd.Process != nil {
 		err = srv.cmd.Process.Kill()
+		if err == nil {
+			err = srv.cmd.Process.Release()
+		}
 		<-srv.closed
 	}
 	return
@@ -213,10 +216,9 @@ func (srv *Server) Start() error {
 func (srv *Server) build() error {
 	log.Printf("Building...%s", srv.host)
 
-	
 	//List of file to pass to "go build"
 	var buildFiles []string
-	
+
 	for _, f := range srv.dep {
 		if strings.HasPrefix(f, srv.targetDir) {
 			buildFiles = append(buildFiles, filepath.Base(f))
@@ -229,12 +231,12 @@ func (srv *Server) build() error {
 	env.Set(KEY_GOPATH, srv.context.GOPATH)
 
 	command, args := srv.builder[0], srv.builder[1:]
-	
+
 	args = append(args, buildFiles...)
 	cmd := exec.Command(command, args...)
 	cmd.Env = env.Data()
 	cmd.Dir = srv.targetDir
-	
+
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) > 0 {
 			r := bufio.NewReader(bytes.NewReader(out))
@@ -322,7 +324,6 @@ func (srv *Server) BuildAndRun() error {
 
 	rebuild = mtime.After(binModTime)
 	restart = restart || rebuild
-
 
 	if !restart && srv.resources != nil {
 		mtime, err := ModTimeList(srv.resources.Paths, srv.resources.Ignore)

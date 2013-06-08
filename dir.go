@@ -46,7 +46,7 @@ func Traverse(path string, visit FileVisitorFunc) error {
 	} else {
 		stack = append(stack, &File{path, info})
 	}
-
+	
 	for pos := len(stack) - 1; pos > -1; pos = len(stack) - 1 {
 		current, stack = stack[pos], stack[:pos]
 
