@@ -68,15 +68,13 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 	for len(queue) > 0 {
 
 		current, queue = queue[0], queue[1:]
-		pkg, err := current.Import()
-
-		if err != nil {
-			return files, err
-		}
+		//Ignore import errors. They should be caught a build time
+		pkg, _ := current.Import()
 
 		if !pkg.Goroot || pkg.ImportPath == "" || strings.Contains(pkg.ImportPath, ".") {
-
-			files = append(files, pkg.PkgObj)
+			if len(pkg.PkgObj) > 0 && fileExists(pkg.PkgObj) {
+				files = append(files, pkg.PkgObj)
+			}
 
 			for _, i := range pkg.Imports {
 				if !visited[i] {
@@ -84,7 +82,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 					queue = append(queue, NewDep(context, i, ""))
 				}
 			}
-			
+
 			f := concat(pkg.Dir, pkg.CFiles, pkg.CgoFiles, pkg.GoFiles, pkg.HFiles, pkg.SFiles, pkg.SysoFiles)
 			files = append(files, f...)
 		}
@@ -93,12 +91,13 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 	return files, nil
 }
 
-
 func concat(path string, elements ...[]string) []string {
 	var files []string
 	for _, e := range elements {
 		for _, v := range e {
-			files = append(files, filepath.Join(path, v))
+			if len(v) > 0 {
+				files = append(files, filepath.Join(path, v))
+			}
 		}
 	}
 

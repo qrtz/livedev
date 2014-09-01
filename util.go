@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"net"
-	"strings"
-	"path/filepath"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 func findAvailablePort() (*net.TCPAddr, error) {
@@ -54,4 +54,10 @@ func ImportRoots(path string) (roots []string) {
 	return roots
 }
 
+func fileExists(name string) bool {
+	if _, err := os.Open(name); err != nil {
+		return !os.IsNotExist(err)
+	}
 
+	return true
+}

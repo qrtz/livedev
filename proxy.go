@@ -58,7 +58,7 @@ func (p *Proxy) ListenAndServe() error {
 		p.ServeHTTP(w, r)
 	})
 
-	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort("localhost", strconv.Itoa(p.port)))
+	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort("", strconv.Itoa(p.port)))
 	if err != nil {
 		return err
 	}

@@ -20,8 +20,7 @@ import (
 )
 
 var (
-	E_TIMEOUT    = errors.New("Timeout:Gave up")
-	E_PROXY_ONLY = errors.New("proxy only")
+	errTimeout = errors.New("Timeout:Gave up")
 )
 
 type PortType uint8
@@ -122,7 +121,7 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 	for {
 		select {
 		case <-timeout:
-			return E_TIMEOUT
+			return errTimeout
 		default:
 			if srv.state != nil {
 				return srv.state
@@ -133,6 +132,7 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 				if response != nil && response.Body != nil {
 					response.Body.Close()
 				}
+				log.Printf("Started: %s\n", srv.addr)
 				return nil
 			}
 
@@ -140,6 +140,8 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+
+	log.Printf("Unable to start: %s\n", srv.addr)
 
 	return lastError
 }
@@ -228,7 +230,7 @@ func (srv *Server) build() error {
 	//Reset the dependency list.
 
 	env := NewEnv(os.Environ())
-	env.Set(KEY_GOPATH, srv.context.GOPATH)
+	env.Set(envGopath, srv.context.GOPATH)
 
 	command, args := srv.builder[0], srv.builder[1:]
 
@@ -302,10 +304,7 @@ func (srv *Server) BuildAndRun() error {
 
 	if stat, err := os.Stat(srv.bin); err == nil {
 		binModTime = stat.ModTime()
-
-		if !restart {
-			restart = binModTime.After(srv.startTime)
-		}
+		restart = binModTime.After(srv.startTime)
 	}
 
 	if len(srv.target) > 0 && len(srv.dep) == 0 {
@@ -316,23 +315,22 @@ func (srv *Server) BuildAndRun() error {
 		srv.dep = dep
 	}
 
-	mtime, err := ModTimeList(srv.dep, nil)
-
+	var err error
+	rebuild, err = ModifiedSince(binModTime, nil, srv.dep...)
 	if err != nil {
 		return err
 	}
 
-	rebuild = mtime.After(binModTime)
 	restart = restart || rebuild
 
 	if !restart && srv.resources != nil {
-		mtime, err := ModTimeList(srv.resources.Paths, srv.resources.Ignore)
-
+		restart, err = ModifiedSince(srv.startTime, srv.resources.Ignore, srv.resources.Paths...)
 		if err != nil {
 			return err
 		}
-		restart = mtime.After(srv.startTime)
 	}
+
+	log.Printf("\nREBUILD: %v | RESTART: %v\n", rebuild, restart)
 
 	if !restart {
 		return nil

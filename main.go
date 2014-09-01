@@ -11,25 +11,23 @@ import (
 	"strings"
 )
 
-var (
-	configFile string
+const (
+	version = "0.1.8"
 )
 
-func init() {
-	flag.StringVar(&configFile, "c", "", "configuration file")
-	log.SetOutput(os.Stderr)
-}
-
 func main() {
+	log.Printf("Livedev %s\n", version)
 
+	configFile := flag.String("c", "", "Configuration file")
+	log.SetOutput(os.Stderr)
 	flag.Parse()
 
-	if len(configFile) == 0 {
+	if len(*configFile) == 0 {
 		flag.Usage()
 		return
 	}
 
-	conf, err := LoadConfig(configFile)
+	conf, err := LoadConfig(*configFile)
 
 	if err != nil {
 		log.Fatal(err)
@@ -40,21 +38,21 @@ func main() {
 	}
 
 	if s := strings.TrimSpace(conf.GOROOT); len(s) > 0 {
-		if err := os.Setenv(KEY_GOROOT, s); err != nil {
+		if err := os.Setenv(envGoroot, s); err != nil {
 			log.Fatal(err)
 		}
 	}
 
 	if len(conf.GOPATH) > 0 {
 		p := strings.Join(conf.GOPATH, string(filepath.ListSeparator))
-		if err := os.Setenv(KEY_GOPATH, p); err != nil {
+		if err := os.Setenv(envGopath, p); err != nil {
 			log.Fatal(err)
 		}
 	}
 
 	var (
-		GOPATH        = filepath.SplitList(os.Getenv(KEY_GOPATH))
-		GOROOT        = os.Getenv(KEY_GOROOT)
+		GOPATH        = filepath.SplitList(os.Getenv(envGopath))
+		GOROOT        = os.Getenv(envGoroot)
 		servers       = make(map[string]*Server)
 		defaultServer *Server
 	)
@@ -66,17 +64,17 @@ func main() {
 		if len(s.GOROOT) == 0 {
 			s.GOROOT = GOROOT
 		}
-		
+
 		if len(s.GOPATH) == 0 {
 			s.GOPATH = GOPATH
 		}
-		
+
 		s.Workspace = strings.TrimSpace(s.Workspace)
-		
+
 		if len(s.Workspace) > 0 {
 			s.GOPATH = append(s.GOPATH, s.Workspace)
 		}
-		
+
 		context.GOROOT = s.GOROOT
 
 		context.GOPATH = strings.Join(s.GOPATH, string(filepath.ListSeparator))
