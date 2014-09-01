@@ -39,6 +39,8 @@ func LoadConfig(configFile string) (*Config, error) {
 		return nil, fmt.Errorf("Unable to read configution file: %s\n%s", configFile, err.Error())
 	}
 
+	defer r.Close()
+
 	conf := new(Config)
 
 	dec := json.NewDecoder(r)
