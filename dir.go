@@ -51,11 +51,7 @@ func walk(path string, walkFn filepath.WalkFunc) error {
 			continue
 		}
 
-		infos, err := readdir(current.Path)
-
-		if err != nil {
-			return err
-		}
+		infos, _ := readdir(current.Path)
 
 		for _, info := range infos {
 			sub := filepath.Join(current.Path, info.Name())
