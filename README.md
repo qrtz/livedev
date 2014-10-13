@@ -45,7 +45,7 @@ livedev is controlled by a json configuration file:
     * __resources__: (optional) A list resources such as template files. Cause a server restart when chaange is made to them.
         * __ignore__: (string, optional) filename pattern
         * __paths__: ([]string) A list of files or directories to monitor
-    * __bin__: (string, optional) server executable file. When absent, livedev will act as proxy only
+    * __bin__: (string, optional) server executable file. When absent, it default to /tmp/livedev[hostname]
     * __builder__: ([]string, optional) To use a builder other that default build tool. The first element is the command and the rest its arguments
     * __startup__: ([]string, optional) server startup argument list
     * __default__: (bool, optinal) Specifies the default server.  
