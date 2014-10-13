@@ -25,7 +25,11 @@ func NewProxy(port int, servers map[string]*Server, defaultServer *Server) *Prox
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	srv, found := p.servers[r.Host]
+	host := r.Host
+	if h, _, err := net.SplitHostPort(r.Host); err == nil {
+		host = h
+	}
+	srv, found := p.servers[host]
 	defer r.Body.Close()
 
 	defer func() {
@@ -36,12 +40,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if !found {
-		log.Printf("Host (%s:%v) not found. Reverting to default\n", r.Host, r.URL.String())
+		log.Printf("Host (%s:%v) not found. Reverting to default\n", host, r.URL.String())
 		srv = p.defaultServer
 	}
 
 	if srv == nil {
-		http.Error(w, fmt.Sprintf(`Host not found "%s"`, r.Host), http.StatusNotFound)
+		http.Error(w, fmt.Sprintf(`Host not found "%s"`, host), http.StatusNotFound)
 		return
 	}
 
