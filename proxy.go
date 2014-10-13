@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 )
 
@@ -27,6 +28,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	srv, found := p.servers[r.Host]
 	defer r.Body.Close()
 
+	defer func() {
+		if err := recover(); err != nil {
+			var buf [2 << 10]byte
+			http.Error(w, fmt.Sprintf("Unknown Error: %v \nTrace: \n%s", err, buf[:runtime.Stack(buf[:], false)]), http.StatusInternalServerError)
+		}
+	}()
+
 	if !found {
 		log.Printf("Host (%s:%v) not found. Reverting to default\n", r.Host, r.URL.String())
 		srv = p.defaultServer
@@ -42,21 +50,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if p.addr.Port == srv.port && srv.tcpAddr.IP.IsLoopback() {
-		http.Error(w, fmt.Sprintf(`Invalid host configuration "%s"`, r.Host), http.StatusNotFound)
-		return
-	}
-
 	if err := srv.ServeHTTP(w, r); err != nil {
-		http.Error(w, fmt.Sprintf("SERVER ERROR: %s", err.Error()), http.StatusInternalServerError)
-	}
+		if srv.state != nil {
+			srv.state, err = nil, srv.state
+		}
 
+		http.Error(w, fmt.Sprintf("Runtime Error: %s", err.Error()), http.StatusInternalServerError)
+	}
 }
 
 func (p *Proxy) ListenAndServe() error {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		p.ServeHTTP(w, r)
-	})
 
 	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort("", strconv.Itoa(p.port)))
 	if err != nil {
@@ -65,5 +68,5 @@ func (p *Proxy) ListenAndServe() error {
 
 	p.addr = addr
 
-	return http.ListenAndServe(p.addr.String(), nil)
+	return http.ListenAndServe(p.addr.String(), p)
 }

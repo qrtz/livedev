@@ -20,14 +20,7 @@ import (
 )
 
 var (
-	errTimeout = errors.New("Timeout:Gave up")
-)
-
-type PortType uint8
-
-const (
-	PROT_TYPE_STATIC = iota
-	PORT_TYPE_DYNAMIC
+	errTimeout = errors.New("Timeout:Gaving up")
 )
 
 type Resource struct {
@@ -46,7 +39,6 @@ type Server struct {
 	host        string
 	lock        sync.Mutex
 	port        int
-	portType    PortType
 	requestTime time.Time
 	resources   *Resource
 	startup     []string
@@ -54,7 +46,6 @@ type Server struct {
 	state       error
 	target      string
 	targetDir   string
-	tcpAddr     *net.TCPAddr
 }
 
 func NewServer(context build.Context, s ServerConf) (*Server, error) {
@@ -89,6 +80,10 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	srv.bin = strings.TrimSpace(s.Bin)
 	srv.builder = s.Builder
 
+	if len(srv.bin) == 0 {
+		srv.bin = filepath.Join(os.TempDir(), "livedev-"+s.Host)
+	}
+
 	if !hasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
 		//Target is not in the $GOPATH
 		//Try to guess the import root(workspace) from the path
@@ -102,6 +97,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	srv.context = context
 
 	if len(srv.builder) == 0 {
+
 		cmd := filepath.Join(context.GOROOT, "bin", "go")
 		srv.builder = append(srv.builder, cmd, "build", "-o", srv.bin)
 	}
@@ -116,7 +112,7 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 	var (
 		lastError error
 	)
-	url := fmt.Sprintf("http://%s/", srv.addr)
+	u := fmt.Sprintf("http://%s/", srv.addr)
 
 	for {
 		select {
@@ -126,12 +122,13 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 			if srv.state != nil {
 				return srv.state
 			}
-			response, err := http.Head(url)
+			response, err := http.Head(u)
 
 			if err == nil {
 				if response != nil && response.Body != nil {
 					response.Body.Close()
 				}
+
 				log.Printf("Started: %s\n", srv.addr)
 				return nil
 			}
@@ -147,6 +144,7 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 }
 
 func (srv *Server) Stop() (err error) {
+	log.Printf("Stopping...%s:%v", srv.host, srv.port)
 	if srv.cmd != nil && srv.cmd.Process != nil {
 		err = srv.cmd.Process.Kill()
 		if err == nil {
@@ -154,15 +152,50 @@ func (srv *Server) Stop() (err error) {
 		}
 		<-srv.closed
 	}
-	return
+
+	if err == nil {
+		srv.state, err = nil, srv.state
+	}
+
+	return err
 }
 
 func (srv *Server) monitor() {
-	defer close(srv.closed)
-	if out, err := srv.cmd.CombinedOutput(); err != nil {
-		if len(out) > 0 {
-			srv.state = errors.New(string(out))
-		} else {
+	defer func() {
+		select {
+		case <-srv.closed:
+			return
+		default:
+			close(srv.closed)
+		}
+	}()
+
+	var stderr bytes.Buffer
+	srv.cmd.Stderr = &stderr
+
+	if err := srv.cmd.Start(); err != nil {
+		srv.state = err
+		srv.cmd = nil
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case <-srv.closed:
+				return
+			default:
+				var buf [2 << 10]byte
+				if ln, _ := stderr.Read(buf[:]); ln > 0 {
+					srv.state = errors.New(string(buf[:ln]))
+				}
+			}
+		}
+	}()
+
+	if err := srv.cmd.Wait(); err != nil {
+		close(srv.closed)
+		if srv.state == nil {
 			srv.state = err
 		}
 	}
@@ -178,16 +211,16 @@ func (srv *Server) Start() error {
 	}
 
 	log.Printf("Starting...%s", srv.host)
-	args := srv.startup
-	if srv.port == 0 {
+
+	generate_port := srv.port == 0
+
+	if generate_port {
 		addr, err := findAvailablePort()
 
 		if err != nil {
 			return err
 		}
-		srv.tcpAddr = addr
 		srv.port = addr.Port
-		srv.portType = PORT_TYPE_DYNAMIC
 	}
 
 	if len(srv.addr) == 0 {
@@ -195,23 +228,21 @@ func (srv *Server) Start() error {
 		log.Println(srv.addr)
 	}
 
-	if srv.tcpAddr == nil {
-		a, err := net.ResolveTCPAddr("tcp", srv.addr)
-		if err != nil {
-			return err
-		}
-		srv.tcpAddr = a
+	if _, err := net.ResolveTCPAddr("tcp", srv.addr); err != nil {
+		return err
 	}
 
-	if srv.portType == PORT_TYPE_DYNAMIC {
-		args = append(args, "--addr", srv.addr)
+	// The verser must accept "--addr" argument if no port is specified in the configuration
+	if generate_port {
+		srv.startup = append(srv.startup, "--addr", srv.addr)
 	}
 
 	srv.state = nil
-	srv.cmd = exec.Command(srv.bin, args...)
+	srv.cmd = exec.Command(srv.bin, srv.startup...)
 	srv.startTime = time.Now()
 	srv.closed = make(chan struct{})
 	go srv.monitor()
+	log.Printf("Waiting for ......%s", srv.host)
 	return srv.wait(time.After(30 * time.Second))
 }
 
@@ -273,23 +304,6 @@ func (srv *Server) BuildAndRun() error {
 		srv.lock.Unlock()
 	}()
 
-	if len(srv.bin) == 0 {
-		if srv.port == 0 {
-			srv.port = 80
-		}
-		if len(srv.addr) == 0 {
-			srv.addr = net.JoinHostPort(srv.host, strconv.Itoa(srv.port))
-			a, err := net.ResolveTCPAddr("tcp", srv.addr)
-			if err != nil {
-				return err
-			}
-			srv.tcpAddr = a
-
-		}
-		//PROXY ONLY
-		return nil
-	}
-
 	//Ignore if the request is within less than 3 seconds of the last one.
 	//This is an arbitrary number. We can certainly increase this.
 	if requestTime.Sub(srv.requestTime) < (3 * time.Second) {
@@ -302,9 +316,23 @@ func (srv *Server) BuildAndRun() error {
 		rebuild    bool
 	)
 
-	if stat, err := os.Stat(srv.bin); err == nil {
-		binModTime = stat.ModTime()
-		restart = binModTime.After(srv.startTime)
+	if len(srv.bin) == 0 {
+		rebuild = true
+		srv.bin = filepath.Join(os.TempDir(), "livedev-"+srv.host)
+
+	} else {
+		stat, err := os.Stat(srv.bin)
+
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+
+		if err == nil {
+			if stat.Size() > 0 {
+				binModTime = stat.ModTime()
+				restart = restart || binModTime.After(srv.startTime)
+			}
+		}
 	}
 
 	if len(srv.target) > 0 && len(srv.dep) == 0 {
