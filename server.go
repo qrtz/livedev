@@ -28,6 +28,46 @@ type Resource struct {
 	Paths  []string
 }
 
+type ReverseBuffer struct {
+	buf bytes.Buffer
+	mu  sync.Mutex
+}
+
+func (b *ReverseBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+func (b *ReverseBuffer) WriteString(s string) (int, error) {
+	return b.Write([]byte(s))
+}
+
+func (b *ReverseBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	inputLen := len(p)
+	buf := make([]byte, b.buf.Len()+inputLen)
+	copy(buf, p)
+	if _, err := b.buf.Read(buf[inputLen:]); err != nil {
+		return 0, err
+	}
+
+	if _, err := b.buf.Write(buf); err != nil {
+		return 0, err
+	}
+
+	return inputLen, nil
+}
+
+func (b *ReverseBuffer) ReadString() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := make([]byte, b.buf.Len())
+	i, _ := b.buf.Read(p)
+	return string(p[:i])
+}
+
 type Server struct {
 	addr        string
 	bin         string
@@ -46,6 +86,11 @@ type Server struct {
 	state       error
 	target      string
 	targetDir   string
+	stdout      ReverseBuffer
+}
+
+func (s *Server) Output() string {
+	return s.stdout.ReadString()
 }
 
 func NewServer(context build.Context, s ServerConf) (*Server, error) {
@@ -119,9 +164,6 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 		case <-timeout:
 			return errTimeout
 		default:
-			if srv.state != nil {
-				return srv.state
-			}
 			response, err := http.Head(u)
 
 			if err == nil {
@@ -139,12 +181,17 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 	}
 
 	log.Printf("Unable to start: %s\n", srv.addr)
+	if lastError != nil {
+		lastError = fmt.Errorf("%s\n%s", lastError, srv.Output())
+	}
 
 	return lastError
 }
 
 func (srv *Server) Stop() (err error) {
 	log.Printf("Stopping...%s:%v", srv.host, srv.port)
+	defer srv.stdout.Reset()
+
 	if srv.cmd != nil && srv.cmd.Process != nil {
 		err = srv.cmd.Process.Kill()
 		if err == nil {
@@ -153,51 +200,20 @@ func (srv *Server) Stop() (err error) {
 		<-srv.closed
 	}
 
-	if err == nil {
-		srv.state, err = nil, srv.state
-	}
-
 	return err
 }
 
 func (srv *Server) monitor() {
-	defer func() {
-		select {
-		case <-srv.closed:
-			return
-		default:
-			close(srv.closed)
-		}
-	}()
-
-	var stderr bytes.Buffer
-	srv.cmd.Stderr = &stderr
+	defer close(srv.closed)
 
 	if err := srv.cmd.Start(); err != nil {
-		srv.state = err
+		srv.stdout.WriteString(err.Error())
 		srv.cmd = nil
 		return
 	}
 
-	go func() {
-		for {
-			select {
-			case <-srv.closed:
-				return
-			default:
-				var buf [2 << 10]byte
-				if ln, _ := stderr.Read(buf[:]); ln > 0 {
-					srv.state = errors.New(string(buf[:ln]))
-				}
-			}
-		}
-	}()
-
 	if err := srv.cmd.Wait(); err != nil {
-		close(srv.closed)
-		if srv.state == nil {
-			srv.state = err
-		}
+		srv.stdout.WriteString(err.Error())
 	}
 
 	srv.cmd = nil
@@ -243,6 +259,9 @@ func (srv *Server) Start() error {
 	srv.closed = make(chan struct{})
 	go srv.monitor()
 	log.Printf("Waiting for ......%s", srv.host)
+	srv.stdout.Reset()
+	srv.cmd.Stderr = &srv.stdout
+	srv.cmd.Stdout = &srv.stdout
 	return srv.wait(time.After(30 * time.Second))
 }
 
@@ -378,6 +397,8 @@ func (srv *Server) BuildAndRun() error {
 }
 
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
+	srv.stdout.WriteString(fmt.Sprintf("Serving: %s\n", r.URL.String()))
+
 	transport := new(http.Transport)
 	h, ok := w.(http.Hijacker)
 
