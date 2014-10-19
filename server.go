@@ -28,44 +28,55 @@ type Resource struct {
 	Paths  []string
 }
 
-type ReverseBuffer struct {
+type Stdout struct {
 	buf bytes.Buffer
 	mu  sync.Mutex
 }
 
-func (b *ReverseBuffer) Reset() {
+func (b *Stdout) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.buf.Reset()
 }
 
-func (b *ReverseBuffer) WriteString(s string) (int, error) {
+func (b *Stdout) WriteString(s string) (int, error) {
 	return b.Write([]byte(s))
 }
 
-func (b *ReverseBuffer) Write(p []byte) (int, error) {
+func (b *Stdout) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	inputLen := len(p)
-	buf := make([]byte, b.buf.Len()+inputLen)
-	copy(buf, p)
-	if _, err := b.buf.Read(buf[inputLen:]); err != nil {
-		return 0, err
-	}
-
-	if _, err := b.buf.Write(buf); err != nil {
-		return 0, err
-	}
-
-	return inputLen, nil
+	return b.buf.Write(p)
 }
 
-func (b *ReverseBuffer) ReadString() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *Stdout) readAll() string {
 	p := make([]byte, b.buf.Len())
 	i, _ := b.buf.Read(p)
 	return string(p[:i])
+}
+
+func (b *Stdout) ReadAll() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.readAll()
+}
+
+// Output reads from first occurrence of the delimiter in the buffer
+// Returning a string containing the data including the delimiter
+func (b *Stdout) ReadString(delim string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for {
+		s, err := b.buf.ReadString('\n')
+		if err != nil {
+			return ""
+		}
+
+		if strings.HasSuffix(s, delim) {
+			return b.readAll()
+		}
+	}
+	return ""
 }
 
 type Server struct {
@@ -86,11 +97,17 @@ type Server struct {
 	state       error
 	target      string
 	targetDir   string
-	stdout      ReverseBuffer
+	stdout      Stdout
 }
 
-func (s *Server) Output() string {
-	return s.stdout.ReadString()
+// Output reads from first occurrence of the delimiter in the server stdout
+// Returning a string containing the data including the delimiter
+func (s *Server) Output(delim string) string {
+	return s.stdout.ReadString(delim)
+}
+
+func (s *Server) Dump() string {
+	return s.stdout.ReadAll()
 }
 
 func NewServer(context build.Context, s ServerConf) (*Server, error) {
@@ -158,11 +175,12 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 		lastError error
 	)
 	u := fmt.Sprintf("http://%s/", srv.addr)
-
+done:
 	for {
 		select {
 		case <-timeout:
-			return errTimeout
+			lastError = errTimeout
+			break done
 		default:
 			response, err := http.Head(u)
 
@@ -181,8 +199,9 @@ func (srv *Server) wait(timeout <-chan time.Time) error {
 	}
 
 	log.Printf("Unable to start: %s\n", srv.addr)
+
 	if lastError != nil {
-		lastError = fmt.Errorf("%s\n%s", lastError, srv.Output())
+		lastError = fmt.Errorf("%s\n%s", lastError, srv.Dump())
 	}
 
 	return lastError
@@ -397,7 +416,8 @@ func (srv *Server) BuildAndRun() error {
 }
 
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
-	srv.stdout.WriteString(fmt.Sprintf("Serving: %s\n", r.URL.String()))
+	delim := fmt.Sprintf("<[%s:%d]>\n", r.URL, time.Now().UnixNano())
+	srv.stdout.WriteString(delim)
 
 	transport := new(http.Transport)
 	h, ok := w.(http.Hijacker)
@@ -416,16 +436,19 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	response, err := transport.RoundTrip(r)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
 	}
 
 	conn, _, err := h.Hijack()
 
 	if err != nil {
-		return err
+		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
 	}
 
 	defer conn.Close()
 	defer response.Body.Close()
-	return response.Write(conn)
+	if err := response.Write(conn); err != nil {
+		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
+	}
+	return nil
 }

@@ -50,12 +50,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := srv.BuildAndRun(); err != nil {
-		http.Error(w, fmt.Sprintf("BUILD ERROR: %s\n%s", err.Error(), srv.Output()), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("BUILD ERROR: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 
 	if err := srv.ServeHTTP(w, r); err != nil {
-		http.Error(w, fmt.Sprintf("Runtime Error: %s\n%s", err.Error(), srv.Output()), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Runtime Error: %s", err.Error()), http.StatusInternalServerError)
 	}
 }
 
