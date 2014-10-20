@@ -29,8 +29,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h, _, err := net.SplitHostPort(r.Host); err == nil {
 		host = h
 	}
+
 	srv, found := p.servers[host]
-	defer r.Body.Close()
 
 	defer func() {
 		if err := recover(); err != nil {

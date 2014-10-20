@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"go/build"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -417,38 +418,43 @@ func (srv *Server) BuildAndRun() error {
 
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	delim := fmt.Sprintf("<[%s:%d]>\n", r.URL, time.Now().UnixNano())
+
 	srv.stdout.WriteString(delim)
 
+	req := new(http.Request)
+	*req = *r
+	req.Host = srv.addr
+	req.URL.Host = srv.addr
+
+	if len(req.URL.Scheme) == 0 {
+		req.URL.Scheme = "http"
+	}
+
+	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		req.Header.Set("X-Forwarded-For", ip)
+	}
+
 	transport := new(http.Transport)
-	h, ok := w.(http.Hijacker)
-
-	if !ok {
-		return errors.New("Unable to hijack connection")
-	}
-
-	r.Host = srv.addr
-	r.URL.Host = r.Host
-
-	if len(r.URL.Scheme) == 0 {
-		r.URL.Scheme = "http"
-	}
-
-	response, err := transport.RoundTrip(r)
+	response, err := transport.RoundTrip(req)
 
 	if err != nil {
 		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
 	}
 
-	conn, _, err := h.Hijack()
-
-	if err != nil {
-		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
-	}
-
-	defer conn.Close()
 	defer response.Body.Close()
-	if err := response.Write(conn); err != nil {
+
+	wh := w.Header()
+
+	for key, v := range response.Header {
+		for _, value := range v {
+			wh.Add(key, value)
+		}
+	}
+
+	w.WriteHeader(response.StatusCode)
+	if _, err := io.Copy(w, response.Body); err != nil {
 		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
 	}
+
 	return nil
 }
