@@ -4,20 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 )
 
 type ServerConf struct {
-	Default   bool         `json:"default"`
-	Host      string       `json:"host"`
-	Port      int          `json:"port"`
-	Bin       string       `json:"bin"`
-	Resources ResourceConf `json:"resources"`
-	Target    string       `json:"target"`
-	Startup   []string     `json:"startup"`
-	Builder   []string     `json:"builder"`
-	Workspace string       `json:"workspace"`
-	GOROOT    string       `json:"GOROOT"`
-	GOPATH    []string     `json:"GOPATH"`
+	Default        bool          `json:"default"`
+	Host           string        `json:"host"`
+	Port           int           `json:"port"`
+	Bin            string        `json:"bin"`
+	Resources      ResourceConf  `json:"resources"`
+	Target         string        `json:"target"`
+	Startup        []string      `json:"startup"`
+	Builder        []string      `json:"builder"`
+	Workspace      string        `json:"workspace"`
+	GOROOT         string        `json:"GOROOT"`
+	GOPATH         []string      `json:"GOPATH"`
+	StartupTimeout time.Duration `json:timeout`
 }
 
 type ResourceConf struct {

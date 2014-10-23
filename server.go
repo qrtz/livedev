@@ -81,24 +81,25 @@ func (b *Stdout) ReadString(delim string) string {
 }
 
 type Server struct {
-	addr        string
-	bin         string
-	builder     []string
-	closed      chan struct{}
-	cmd         *exec.Cmd
-	context     build.Context
-	dep         []string
-	host        string
-	lock        sync.Mutex
-	port        int
-	requestTime time.Time
-	resources   *Resource
-	startup     []string
-	startTime   time.Time
-	state       error
-	target      string
-	targetDir   string
-	stdout      Stdout
+	addr           string
+	bin            string
+	builder        []string
+	closed         chan struct{}
+	cmd            *exec.Cmd
+	context        build.Context
+	dep            []string
+	host           string
+	lock           sync.Mutex
+	port           int
+	requestTime    time.Time
+	resources      *Resource
+	startup        []string
+	startTime      time.Time
+	state          error
+	target         string
+	targetDir      string
+	stdout         Stdout
+	startupTimeout time.Duration
 }
 
 // Output reads from first occurrence of the delimiter in the server stdout
@@ -138,6 +139,12 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 		}
 	}
 
+	srv.startupTimeout = s.StartupTimeout
+
+	if srv.startupTimeout == 0 {
+		srv.startupTimeout = 5
+	}
+
 	srv.target = strings.TrimSpace(s.Target)
 	srv.targetDir = filepath.Dir(s.Target)
 	srv.bin = strings.TrimSpace(s.Bin)
@@ -160,9 +167,13 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	srv.context = context
 
 	if len(srv.builder) == 0 {
+		gobin := "go"
 
-		cmd := filepath.Join(context.GOROOT, "bin", "go")
-		srv.builder = append(srv.builder, cmd, "build", "-o", srv.bin)
+		if len(context.GOROOT) > 0 && fileExists(context.GOROOT) {
+			gobin = filepath.Join(context.GOROOT, "bin", gobin)
+		}
+
+		srv.builder = append(srv.builder, gobin, "build", "-o", srv.bin)
 	}
 
 	srv.port = s.Port
@@ -171,7 +182,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	return srv, nil
 }
 
-func (srv *Server) wait(timeout <-chan time.Time) error {
+func (srv *Server) waitForStart(timeout <-chan time.Time) error {
 	var (
 		lastError error
 	)
@@ -273,16 +284,19 @@ func (srv *Server) Start() error {
 		srv.startup = append(srv.startup, "--addr", srv.addr)
 	}
 
+	srv.startup = append(srv.startup, "2>$1")
+
 	srv.state = nil
 	srv.cmd = exec.Command(srv.bin, srv.startup...)
 	srv.startTime = time.Now()
 	srv.closed = make(chan struct{})
-	go srv.monitor()
-	log.Printf("Waiting for ......%s", srv.host)
 	srv.stdout.Reset()
 	srv.cmd.Stderr = &srv.stdout
 	srv.cmd.Stdout = &srv.stdout
-	return srv.wait(time.After(30 * time.Second))
+	go srv.monitor()
+	log.Printf("Starting ......%s", srv.host)
+	return srv.waitForStart(time.After(srv.startupTimeout * time.Second))
+
 }
 
 func (srv *Server) build() error {
@@ -305,6 +319,7 @@ func (srv *Server) build() error {
 	command, args := srv.builder[0], srv.builder[1:]
 
 	args = append(args, buildFiles...)
+
 	cmd := exec.Command(command, args...)
 	cmd.Env = env.Data()
 	cmd.Dir = srv.targetDir

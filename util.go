@@ -21,7 +21,7 @@ func findAvailablePort() (*net.TCPAddr, error) {
 	return nil, err
 }
 
-//Test whether any element in prefix begins with path
+// Test whether any element in prefix begins with path
 func hasPrefix(path string, prefix []string) bool {
 	if len(path) == 0 || len(prefix) == 0 {
 		return false
@@ -38,7 +38,7 @@ func hasPrefix(path string, prefix []string) bool {
 	return false
 }
 
-//Returns a list of directory names with a sub-directory named "src"
+// Returns a list of directory names with a sub-directory named "src"
 func ImportRoots(path string) (roots []string) {
 	dir, _ := filepath.Split(filepath.Clean(path))
 
