@@ -55,9 +55,12 @@ func ImportRoots(path string) (roots []string) {
 }
 
 func fileExists(name string) bool {
-	if _, err := os.Open(name); err != nil {
+	f, err := os.Open(name)
+	if err != nil {
 		return !os.IsNotExist(err)
 	}
+
+	f.Close()
 
 	return true
 }
