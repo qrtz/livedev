@@ -306,7 +306,7 @@ func (srv *Server) build() error {
 	var buildFiles []string
 
 	for _, f := range srv.dep {
-		if strings.HasPrefix(f, srv.targetDir) {
+		if filepath.Dir(f) == srv.targetDir {
 			buildFiles = append(buildFiles, filepath.Base(f))
 		}
 	}
