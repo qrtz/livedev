@@ -19,7 +19,7 @@ type ServerConf struct {
 	Workspace      string        `json:"workspace"`
 	GOROOT         string        `json:"GOROOT"`
 	GOPATH         []string      `json:"GOPATH"`
-	StartupTimeout time.Duration `json:timeout`
+	StartupTimeout time.Duration `json:"timeout"`
 }
 
 type ResourceConf struct {

@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type Dep struct {
@@ -15,7 +14,7 @@ type Dep struct {
 	Dir     string
 }
 
-func NewDep(context *build.Context, name, dir string) *Dep {
+func newDep(context *build.Context, name, dir string) *Dep {
 	return &Dep{context, name, dir}
 }
 
@@ -43,7 +42,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 	visited := make(map[string]bool)
 
 	if info.IsDir() {
-		queue = append(queue, NewDep(context, "", target))
+		queue = append(queue, newDep(context, "", target))
 	} else {
 		f, err := parser.ParseFile(token.NewFileSet(), target, nil, parser.ImportsOnly)
 
@@ -51,7 +50,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 			return files, err
 		}
 
-		d := NewDep(context, "", filepath.Dir(target))
+		d := newDep(context, "", filepath.Dir(target))
 
 		if f.Name != nil {
 			if n := f.Name.String(); n != "main" {
@@ -71,7 +70,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 		//Ignore import errors. They should be caught a build time
 		pkg, _ := current.Import()
 
-		if !pkg.Goroot || pkg.ImportPath == "" || strings.Contains(pkg.ImportPath, ".") {
+		if !pkg.Goroot {
 			if len(pkg.PkgObj) > 0 && fileExists(pkg.PkgObj) {
 				files = append(files, pkg.PkgObj)
 			}
@@ -79,7 +78,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 			for _, i := range pkg.Imports {
 				if !visited[i] {
 					visited[i] = true
-					queue = append(queue, NewDep(context, i, ""))
+					queue = append(queue, newDep(context, i, ""))
 				}
 			}
 
