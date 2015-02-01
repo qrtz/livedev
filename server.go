@@ -104,12 +104,12 @@ type Server struct {
 
 // Output reads from first occurrence of the delimiter in the server stdout
 // Returning a string containing the data including the delimiter
-func (s *Server) Output(delim string) string {
-	return s.stdout.ReadString(delim)
+func (srv *Server) Output(delim string) string {
+	return srv.stdout.ReadString(delim)
 }
 
-func (s *Server) Dump() string {
-	return s.stdout.ReadAll()
+func (srv *Server) Dump() string {
+	return srv.stdout.ReadAll()
 }
 
 func NewServer(context build.Context, s ServerConf) (*Server, error) {
@@ -185,22 +185,21 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 func (srv *Server) waitForStart(timeout <-chan time.Time) error {
 	var (
 		lastError error
+		url       = fmt.Sprintf("http://%s/", srv.addr)
 	)
-	u := fmt.Sprintf("http://%s/", srv.addr)
 done:
 	for {
 		select {
 		case <-timeout:
-			lastError = errTimeout
+			if lastError == nil {
+				lastError = errTimeout
+			}
 			break done
 		default:
-			response, err := http.Head(u)
+			response, err := http.Head(url)
 
 			if err == nil {
-				if response != nil && response.Body != nil {
-					response.Body.Close()
-				}
-
+				response.Body.Close()
 				log.Printf("Started: %s\n", srv.addr)
 				return nil
 			}
@@ -213,7 +212,7 @@ done:
 	log.Printf("Unable to start: %s\n", srv.addr)
 
 	if lastError != nil {
-		lastError = fmt.Errorf("%s\n%s", lastError, srv.Dump())
+		lastError = fmt.Errorf("%v\n%s", lastError, srv.Dump())
 	}
 
 	return lastError
