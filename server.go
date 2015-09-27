@@ -77,7 +77,6 @@ func (b *Stdout) ReadString(delim string) string {
 			return b.readAll()
 		}
 	}
-	return ""
 }
 
 type Server struct {
