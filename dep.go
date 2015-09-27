@@ -8,17 +8,18 @@ import (
 	"path/filepath"
 )
 
-type Dep struct {
+type Package struct {
 	Context *build.Context
 	Name    string
 	Dir     string
 }
 
-func newDep(context *build.Context, name, dir string) *Dep {
-	return &Dep{context, name, dir}
+func newPackage(context *build.Context, name, dir string) *Package {
+	return &Package{context, name, dir}
 }
 
-func (p *Dep) Import() (*build.Package, error) {
+// Import loads and return the build packagee
+func (p *Package) Import() (*build.Package, error) {
 	if p.Name != "" {
 		return p.Context.Import(p.Name, p.Dir, build.AllowBinary)
 	}
@@ -26,10 +27,10 @@ func (p *Dep) Import() (*build.Package, error) {
 	return p.Context.ImportDir(p.Dir, build.AllowBinary)
 }
 
-//Computes the target's dependencies
+// ComputeDep returns the list of the target's dependency files
 func ComputeDep(context *build.Context, target string) ([]string, error) {
 	var (
-		queue []*Dep
+		queue []*Package
 		files []string
 	)
 
@@ -42,7 +43,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 	visited := make(map[string]bool)
 
 	if info.IsDir() {
-		queue = append(queue, newDep(context, "", target))
+		queue = append(queue, newPackage(context, "", target))
 	} else {
 		f, err := parser.ParseFile(token.NewFileSet(), target, nil, parser.ImportsOnly)
 
@@ -50,7 +51,7 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 			return files, err
 		}
 
-		d := newDep(context, "", filepath.Dir(target))
+		d := newPackage(context, "", filepath.Dir(target))
 
 		if f.Name != nil {
 			if n := f.Name.String(); n != "main" {
@@ -62,12 +63,12 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 		queue = append(queue, d)
 	}
 
-	var current *Dep
+	var current *Package
 
 	for len(queue) > 0 {
 
 		current, queue = queue[0], queue[1:]
-		//Ignore import errors. They should be caught a build time
+		// Ignore import errors. They should be caught at build time
 		pkg, _ := current.Import()
 
 		if !pkg.Goroot {
@@ -78,11 +79,11 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 			for _, i := range pkg.Imports {
 				if !visited[i] {
 					visited[i] = true
-					queue = append(queue, newDep(context, i, ""))
+					queue = append(queue, newPackage(context, i, ""))
 				}
 			}
 
-			f := concat(pkg.Dir, pkg.CFiles, pkg.CgoFiles, pkg.GoFiles, pkg.HFiles, pkg.SFiles, pkg.SysoFiles)
+			f := addPrefix(pkg.Dir, pkg.CFiles, pkg.CgoFiles, pkg.GoFiles, pkg.HFiles, pkg.SFiles, pkg.SysoFiles)
 			files = append(files, f...)
 		}
 	}
@@ -90,12 +91,13 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 	return files, nil
 }
 
-func concat(path string, elements ...[]string) []string {
+// addPrefix adds prefix at beginning of each name in the list
+func addPrefix(prefix string, names ...[]string) []string {
 	var files []string
-	for _, e := range elements {
-		for _, v := range e {
-			if len(v) > 0 {
-				files = append(files, filepath.Join(path, v))
+	for _, name := range names {
+		for _, n := range name {
+			if len(n) > 0 {
+				files = append(files, filepath.Join(prefix, n))
 			}
 		}
 	}
