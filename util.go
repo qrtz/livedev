@@ -21,16 +21,14 @@ func findAvailablePort() (*net.TCPAddr, error) {
 	return nil, err
 }
 
-// Test whether any element in prefix begins with path
-func hasPrefix(path string, prefix []string) bool {
-	if len(path) == 0 || len(prefix) == 0 {
+// HasPrefix is a convenient wrapper for strings.HasPrefix to test a list of prefixes
+func HasPrefix(s string, prefixes []string) bool {
+	if len(s) == 0 || len(prefixes) == 0 {
 		return false
 	}
 
-	for _, p := range prefix {
-		p = strings.TrimSpace(p)
-
-		if len(p) > 0 && strings.HasPrefix(path, p) {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
 			return true
 		}
 	}
@@ -38,7 +36,7 @@ func hasPrefix(path string, prefix []string) bool {
 	return false
 }
 
-// Returns a list of directory names with a sub-directory named "src"
+// ImportRoots returns a list of directories that contain a sub-directory named "src"
 func ImportRoots(path string) (roots []string) {
 	dir, _ := filepath.Split(filepath.Clean(path))
 

@@ -8,18 +8,18 @@ import (
 	"path/filepath"
 )
 
-type Package struct {
+type pkg struct {
 	Context *build.Context
 	Name    string
 	Dir     string
 }
 
-func newPackage(context *build.Context, name, dir string) *Package {
-	return &Package{context, name, dir}
+func newPackage(context *build.Context, name, dir string) *pkg {
+	return &pkg{context, name, dir}
 }
 
 // Import loads and return the build packagee
-func (p *Package) Import() (*build.Package, error) {
+func (p *pkg) Import() (*build.Package, error) {
 	if p.Name != "" {
 		return p.Context.Import(p.Name, p.Dir, build.AllowBinary)
 	}
@@ -27,10 +27,10 @@ func (p *Package) Import() (*build.Package, error) {
 	return p.Context.ImportDir(p.Dir, build.AllowBinary)
 }
 
-// ComputeDep returns the list of the target's dependency files
-func ComputeDep(context *build.Context, target string) ([]string, error) {
+// computeDep returns the list of the target's dependency files
+func computeDep(context *build.Context, target string) ([]string, error) {
 	var (
-		queue []*Package
+		queue []*pkg
 		files []string
 	)
 
@@ -63,27 +63,27 @@ func ComputeDep(context *build.Context, target string) ([]string, error) {
 		queue = append(queue, d)
 	}
 
-	var current *Package
+	var current *pkg
 
 	for len(queue) > 0 {
 
 		current, queue = queue[0], queue[1:]
 		// Ignore import errors. They should be caught at build time
-		pkg, _ := current.Import()
+		p, _ := current.Import()
 
-		if !pkg.Goroot {
-			if len(pkg.PkgObj) > 0 && fileExists(pkg.PkgObj) {
-				files = append(files, pkg.PkgObj)
+		if !p.Goroot {
+			if len(p.PkgObj) > 0 && fileExists(p.PkgObj) {
+				files = append(files, p.PkgObj)
 			}
 
-			for _, i := range pkg.Imports {
+			for _, i := range p.Imports {
 				if !visited[i] {
 					visited[i] = true
 					queue = append(queue, newPackage(context, i, ""))
 				}
 			}
 
-			f := addPrefix(pkg.Dir, pkg.CFiles, pkg.CgoFiles, pkg.GoFiles, pkg.HFiles, pkg.SFiles, pkg.SysoFiles)
+			f := addPrefix(p.Dir, p.CFiles, p.CgoFiles, p.GoFiles, p.HFiles, p.SFiles, p.SysoFiles)
 			files = append(files, f...)
 		}
 	}

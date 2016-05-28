@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,66 +18,72 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/qrtz/livedev/env"
 )
 
 var (
-	errTimeout = errors.New("Timeout:Gaving up")
+	errTimeout            = errors.New("Timeout:Gaving up")
+	errInvalidFilePattern = errors.New("Invalid file pattern")
 )
 
 type Resource struct {
 	Ignore *regexp.Regexp
-	Paths  []string
+	Paths  map[string]struct{}
 }
 
-type Stdout struct {
-	buf bytes.Buffer
-	mu  sync.Mutex
-}
-
-func (b *Stdout) Reset() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.buf.Reset()
-}
-
-func (b *Stdout) WriteString(s string) (int, error) {
-	return b.Write([]byte(s))
-}
-
-func (b *Stdout) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *Stdout) readAll() string {
-	p := make([]byte, b.buf.Len())
-	i, _ := b.buf.Read(p)
-	return string(p[:i])
-}
-
-func (b *Stdout) ReadAll() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.readAll()
-}
-
-// Output reads from first occurrence of the delimiter in the buffer
-// Returning a string containing the data including the delimiter
-func (b *Stdout) ReadString(delim string) string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for {
-		s, err := b.buf.ReadString('\n')
-		if err != nil {
-			return ""
-		}
-
-		if strings.HasSuffix(s, delim) {
-			return b.readAll()
+func (r Resource) MatchPath(p string) bool {
+	for f := range r.Paths {
+		if strings.HasPrefix(p, f) {
+			return r.Ignore == nil || !r.Ignore.MatchString(p)
 		}
 	}
+	return false
+}
+
+type ErrorLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *ErrorLog) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf.Reset()
+}
+
+func (l *ErrorLog) WriteString(s string) (int, error) {
+	return l.Write([]byte(s))
+}
+
+func (l *ErrorLog) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(b)
+}
+
+func (l *ErrorLog) readAll() string {
+	b := make([]byte, l.buf.Len())
+	i, _ := l.buf.Read(b)
+	return string(b[:i])
+}
+
+func (l *ErrorLog) ReadAll() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.readAll()
+}
+
+type Logger struct {
+	prefix string
+}
+
+func (l *Logger) Write(b []byte) (int, error) {
+	log.Println(l.prefix + string(b))
+	return len(b), nil
 }
 
 type Server struct {
@@ -86,42 +93,140 @@ type Server struct {
 	closed         chan struct{}
 	cmd            *exec.Cmd
 	context        build.Context
-	dep            []string
+	dep            map[string]struct{}
 	host           string
-	lock           sync.Mutex
 	port           int
-	requestTime    time.Time
 	resources      *Resource
 	startup        []string
-	startTime      time.Time
-	state          error
 	target         string
 	targetDir      string
-	stdout         Stdout
+	stdout         *Logger
+	stderr         *ErrorLog
 	startupTimeout time.Duration
+	watcher        *fsnotify.Watcher
+	pending        sync.WaitGroup
+
+	busy    chan bool
+	ready   chan error
+	stopped chan bool
+	started chan bool
+	exit    chan bool
+	done    chan error
+
+	mu    sync.Mutex
+	error error
+
+	once sync.Once
 }
 
-// Output reads from first occurrence of the delimiter in the server stdout
-// Returning a string containing the data including the delimiter
-func (srv *Server) Output(delim string) string {
-	return srv.stdout.ReadString(delim)
+func (srv *Server) setError(err error) {
+	srv.mu.Lock()
+	srv.error = err
+	srv.mu.Unlock()
 }
 
-func (srv *Server) Dump() string {
-	return srv.stdout.ReadAll()
+func (srv *Server) getError() error {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return srv.error
 }
 
-func NewServer(context build.Context, s ServerConf) (*Server, error) {
+func (srv *Server) startWatcher() error {
+	watcher, err := fsnotify.NewWatcher()
+
+	if err != nil {
+		return err
+	}
+
+	srv.watcher = watcher
+
+	go func() {
+		var mu sync.Mutex
+		var timer *time.Timer
+		for {
+			select {
+			case event := <-srv.watcher.Events:
+				mu.Lock()
+
+				if event.Op&fsnotify.Chmod != fsnotify.Chmod {
+					if timer != nil {
+						timer.Stop()
+						timer = nil
+					}
+
+					timer = time.AfterFunc(1*time.Second, func() {
+						srv.Sync(event.Name)
+					})
+				}
+				mu.Unlock()
+			case err := <-srv.watcher.Errors:
+				log.Println("Watcher error:", err)
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (srv *Server) runOnce() {
+	srv.once.Do(func() {
+		srv.busy <- true
+		defer func() {
+			srv.started <- true
+			go srv.loop()
+			<-srv.busy
+		}()
+
+		// TODO: Use only 1 watcher for all servers
+		if err := srv.startWatcher(); err != nil {
+			srv.setError(err)
+			return
+		}
+
+		err := srv.build()
+		srv.setError(err)
+
+		if err == nil {
+			err = srv.start()
+			if err != nil {
+				srv.setError(fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll()))
+			}
+		}
+
+		for f := range srv.resources.Paths {
+			if info, err := os.Lstat(f); err == nil {
+				if info.IsDir() {
+					filepath.Walk(f, func(path string, info os.FileInfo, err error) error {
+						if err == nil && info.IsDir() {
+							if srv.resources.Ignore != nil && srv.resources.Ignore.MatchString(path) {
+								return filepath.SkipDir
+							}
+
+							srv.watcher.Add(path)
+						}
+
+						return nil
+					})
+				} else {
+					srv.watcher.Add(f)
+				}
+			}
+		}
+	})
+}
+
+func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	var (
 		srv    = new(Server)
+		paths  = make(map[string]struct{})
 		ignore *regexp.Regexp
-		paths  []string
 	)
 
 	if len(s.Resources.Paths) > 0 {
+		var v struct{}
 		for _, s := range s.Resources.Paths {
 			if p := strings.TrimSpace(s); len(p) > 0 {
-				paths = append(paths, p)
+				paths[filepath.Clean(p)] = v
 			}
 		}
 
@@ -130,7 +235,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 				if pattern, err := regexp.Compile(s); err == nil {
 					ignore = pattern
 				} else {
-					return nil, fmt.Errorf(`Fatal error: Invalid pattern "%s" : %v`, s, err)
+					return nil, errInvalidFilePattern
 				}
 			}
 
@@ -141,7 +246,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 	srv.startupTimeout = s.StartupTimeout
 
 	if srv.startupTimeout == 0 {
-		srv.startupTimeout = 5
+		srv.startupTimeout = 10
 	}
 
 	srv.target = strings.TrimSpace(s.Target)
@@ -153,7 +258,7 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 		srv.bin = filepath.Join(os.TempDir(), "livedev-"+s.Host)
 	}
 
-	if !hasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
+	if !HasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
 		//Target is not in the $GOPATH
 		//Try to guess the import root(workspace) from the path
 		roots := ImportRoots(srv.target)
@@ -175,91 +280,122 @@ func NewServer(context build.Context, s ServerConf) (*Server, error) {
 		srv.builder = append(srv.builder, gobin, "build", "-o", srv.bin)
 	}
 
+	srv.ready = make(chan error, 1)
+	srv.busy = make(chan bool, 1)
+	srv.stopped = make(chan bool, 1)
+	srv.started = make(chan bool, 1)
+	srv.done = make(chan error, 1)
+	srv.exit = make(chan bool, 1)
 	srv.port = s.Port
 	srv.startup = s.Startup
 	srv.host = s.Host
+	srv.stdout = &Logger{srv.host + ": "}
+	srv.stderr = new(ErrorLog)
 	return srv, nil
 }
 
-func (srv *Server) waitForStart(timeout <-chan time.Time) error {
-	var (
-		lastError error
-		url       = fmt.Sprintf("http://%s/", srv.addr)
-	)
-done:
-	for {
-		select {
-		case <-timeout:
-			if lastError == nil {
-				lastError = errTimeout
-			}
-			break done
-		default:
-			response, err := http.Head(url)
+func (srv *Server) testConnection(target *url.URL, timeout time.Duration) <-chan error {
+	t := time.After(timeout)
+	done := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case err := <-srv.done:
+				done <- err
+				srv.done <- err
+			case <-t:
+				done <- errTimeout
+				return
+			default:
+				response, err := http.Head(target.String())
+				if err == nil {
+					response.Body.Close()
+					done <- nil
+					return
+				}
 
-			if err == nil {
-				response.Body.Close()
-				log.Printf("Started: %s\n", srv.addr)
-				return nil
-			}
+				if t, ok := err.(*url.Error); ok && t.Err == io.EOF {
+					// The server started successfully but
+					done <- nil
+					return
+				}
 
-			lastError = err
-			time.Sleep(100 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
-	}
+	}()
 
-	log.Printf("Unable to start: %s\n", srv.addr)
-
-	if lastError != nil {
-		lastError = fmt.Errorf("%v\n%s", lastError, srv.Dump())
-	}
-
-	return lastError
+	return done
 }
 
-func (srv *Server) Stop() (err error) {
+func (srv *Server) stop() error {
 	log.Printf("Stopping...%s:%v", srv.host, srv.port)
-	defer srv.stdout.Reset()
+	select {
+	case srv.stopped <- true:
+		<-time.After(10 * time.Millisecond)
+		srv.pending.Wait()
+		return srv.stopProcess()
+	default:
+	}
+	return nil
+}
 
-	if srv.cmd != nil && srv.cmd.Process != nil {
-		err = srv.cmd.Process.Kill()
-		if err == nil {
-			err = srv.cmd.Process.Release()
+func (srv *Server) Shutdown() error {
+	select {
+	case srv.exit <- true:
+		if srv.watcher != nil {
+			srv.watcher.Close()
 		}
-		<-srv.closed
-	}
-
-	return err
-}
-
-func (srv *Server) monitor() {
-	defer close(srv.closed)
-
-	if err := srv.cmd.Start(); err != nil {
-		srv.stdout.WriteString(err.Error())
-		srv.cmd = nil
-		return
-	}
-
-	if err := srv.cmd.Wait(); err != nil {
-		srv.stdout.WriteString(err.Error())
-	}
-
-	srv.cmd = nil
-}
-
-func (srv *Server) Start() error {
-
-	if srv.cmd != nil {
-		log.Printf(`"%s" already started`, srv.host)
+		return srv.stop()
+	default:
 		return nil
 	}
+}
 
+func (srv *Server) Sync(filename string) error {
+	srv.busy <- true
+	defer func() {
+		srv.started <- <-srv.busy
+	}()
+
+	_, rebuild := srv.dep[filename]
+
+	restart := rebuild || srv.resources.MatchPath(filename)
+
+	if restart {
+		err := srv.stop()
+		srv.setError(err)
+		if err != nil {
+			return err
+		}
+	}
+
+	if rebuild {
+		err := srv.build()
+		srv.setError(err)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if restart {
+		err := srv.start()
+		if err != nil {
+			err = fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll())
+		}
+		srv.setError(err)
+	}
+
+	return nil
+}
+
+func (srv *Server) start() error {
 	log.Printf("Starting...%s", srv.host)
 
-	generate_port := srv.port == 0
+	generatePort := srv.port == 0
 
-	if generate_port {
+	if generatePort {
 		addr, err := findAvailablePort()
 
 		if err != nil {
@@ -270,30 +406,141 @@ func (srv *Server) Start() error {
 
 	if len(srv.addr) == 0 {
 		srv.addr = net.JoinHostPort(srv.host, strconv.Itoa(srv.port))
-		log.Println(srv.addr)
 	}
+	log.Println(srv.addr)
 
 	if _, err := net.ResolveTCPAddr("tcp", srv.addr); err != nil {
 		return err
 	}
 
-	// The verser must accept "--addr" argument if no port is specified in the configuration
-	if generate_port {
+	srv.stderr.Reset()
+
+	// The server must accept "--addr" argument if no port is specified in the configuration
+	if generatePort {
 		srv.startup = append(srv.startup, "--addr", srv.addr)
 	}
 
-	srv.startup = append(srv.startup, "2>$1")
+	err := srv.startProcess()
+	if err == nil {
+		select {
+		case err = <-srv.done:
+		default:
+		}
+	}
 
-	srv.state = nil
-	srv.cmd = exec.Command(srv.bin, srv.startup...)
-	srv.startTime = time.Now()
-	srv.closed = make(chan struct{})
-	srv.stdout.Reset()
-	srv.cmd.Stderr = &srv.stdout
-	srv.cmd.Stdout = &srv.stdout
-	go srv.monitor()
-	log.Printf("Starting ......%s", srv.host)
-	return srv.waitForStart(time.After(srv.startupTimeout * time.Second))
+	log.Println(srv.host, "...Startup completed")
+	return err
+}
+
+func (srv *Server) loop() {
+	<-srv.started
+	err := srv.getError()
+	for {
+		select {
+		case s := <-srv.stopped:
+			srv.stopped <- s
+			select {
+			case <-srv.ready:
+			default:
+			}
+			<-srv.started
+			<-srv.stopped
+			err = srv.getError()
+		case <-srv.exit:
+			select {
+			case <-srv.ready:
+			default:
+			}
+			return
+		case srv.ready <- err:
+		}
+	}
+}
+
+func (srv *Server) stopProcess() error {
+	if srv.cmd != nil {
+		err := srv.cmd.Process.Signal(syscall.SIGTERM)
+
+		if err != nil {
+			err = srv.cmd.Process.Signal(syscall.SIGKILL)
+		}
+
+		if err != nil {
+			log.Println("stopProcess Error:::", err)
+		}
+
+		select {
+		case err = <-srv.done:
+			srv.cmd = nil
+			return err
+		case <-time.After(srv.startupTimeout):
+			err = srv.cmd.Process.Signal(syscall.SIGKILL)
+			if err == nil {
+				err = <-srv.done
+				srv.cmd = nil
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (srv *Server) restart() error {
+	srv.busy <- true
+	defer func() {
+		srv.started <- <-srv.busy
+	}()
+
+	err := srv.stop()
+	srv.setError(err)
+	if err != nil {
+		return err
+	}
+
+	err = srv.start()
+	if err != nil {
+		err = fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll())
+	}
+	srv.setError(err)
+	return err
+}
+
+func (srv *Server) startProcess() error {
+	ev := env.New(os.Environ())
+
+	cmd := exec.Command(srv.bin, srv.startup...)
+	cmd.Env = ev.Data()
+	cmd.Stderr = srv.stderr
+	cmd.Stdout = srv.stdout
+
+	err := cmd.Start()
+	if err == nil {
+		srv.cmd = cmd
+
+		go func() {
+			err := cmd.Wait()
+			log.Println(srv.host, "->", err)
+			select {
+			case srv.stopped <- true:
+				// The process crashed or was kill externally
+				// Restart it
+				// TODO: limit the number of consecutive restart
+				<-srv.stopped
+				go srv.restart()
+			default:
+			}
+			srv.done <- nil
+		}()
+
+		return <-srv.testConnection(&url.URL{
+			Host:   srv.addr,
+			Scheme: "http",
+			Path:   "/",
+		}, srv.startupTimeout*time.Second)
+	}
+	srv.done <- err
+	return err
 
 }
 
@@ -303,16 +550,30 @@ func (srv *Server) build() error {
 	//List of file to pass to "go build"
 	var buildFiles []string
 
-	for _, f := range srv.dep {
+	dep, err := computeDep(&srv.context, srv.target)
+	if err != nil {
+		return err
+	}
+
+	for f := range srv.dep {
+		srv.watcher.Remove(f)
+	}
+
+	//Reset the dependency list.
+	srv.dep = make(map[string]struct{})
+	for _, f := range dep {
+		srv.dep[f] = struct{}{}
+		if err := srv.watcher.Add(f); err != nil {
+			return err
+		}
+
 		if filepath.Dir(f) == srv.targetDir {
 			buildFiles = append(buildFiles, filepath.Base(f))
 		}
 	}
 
-	//Reset the dependency list.
-
-	env := NewEnv(os.Environ())
-	env.Set(envGopath, srv.context.GOPATH)
+	env := env.New(os.Environ())
+	env.Set("GOPATH", srv.context.GOPATH)
 
 	command, args := srv.builder[0], srv.builder[1:]
 
@@ -342,102 +603,85 @@ func (srv *Server) build() error {
 		return err
 	}
 
-	srv.dep = nil
 	return nil
-
 }
 
-func (srv *Server) BuildAndRun() error {
-	requestTime := time.Now()
-	srv.lock.Lock()
+func writeWebSocketError(w io.Writer, err error, code int) {
+	b := bufio.NewWriter(w)
+	fmt.Fprintf(b, "HTTP/1.1 %03d %s\r\n", code, http.StatusText(code))
+	b.WriteString("\r\n")
+	b.WriteString(err.Error())
+	b.Flush()
+}
 
-	defer func() {
-		srv.requestTime = time.Now()
-		srv.lock.Unlock()
-	}()
+func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error {
+	client, buf, err := w.(http.Hijacker).Hijack()
 
-	//Ignore if the request is within less than 3 seconds of the last one.
-	//This is an arbitrary number. We can certainly increase this.
-	if requestTime.Sub(srv.requestTime) < (3 * time.Second) {
-		return nil
-	}
-
-	var (
-		binModTime time.Time
-		restart    = srv.cmd == nil
-		rebuild    bool
-	)
-
-	if len(srv.bin) == 0 {
-		rebuild = true
-		srv.bin = filepath.Join(os.TempDir(), "livedev-"+srv.host)
-
-	} else {
-		stat, err := os.Stat(srv.bin)
-
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-
-		if err == nil {
-			if stat.Size() > 0 {
-				binModTime = stat.ModTime()
-				restart = restart || binModTime.After(srv.startTime)
-			}
-		}
-	}
-
-	if len(srv.target) > 0 && len(srv.dep) == 0 {
-		dep, err := ComputeDep(&srv.context, srv.target)
-		if err != nil {
-			return err
-		}
-		srv.dep = dep
-	}
-
-	var err error
-	rebuild, err = ModifiedSince(binModTime, nil, srv.dep...)
 	if err != nil {
 		return err
 	}
 
-	restart = restart || rebuild
+	requestURL := *r.URL
+	requestURL.Host = srv.addr
 
-	if !restart && srv.resources != nil {
-		restart, err = ModifiedSince(srv.startTime, srv.resources.Ignore, srv.resources.Paths...)
-		if err != nil {
-			return err
-		}
-	}
+	conn, err := net.Dial(client.LocalAddr().Network(), requestURL.Host)
 
-	log.Printf("\nREBUILD: %v | RESTART: %v\n", rebuild, restart)
-
-	if !restart {
+	if err != nil {
+		log.Printf("Websocket error: \n%s\n%s\n", err.Error(), requestURL.String())
+		writeWebSocketError(buf, err, http.StatusInternalServerError)
+		client.Close()
 		return nil
 	}
 
-	if err := srv.Stop(); err != nil {
+	if err = r.Write(conn); err != nil {
+		log.Printf("Websocket error: \n%s\n%s\n", err.Error(), requestURL.String())
+		writeWebSocketError(buf, err, http.StatusInternalServerError)
+		conn.Close()
+		client.Close()
 		return err
 	}
 
-	if rebuild {
-		if err := srv.build(); err != nil {
-			return err
+	go func() {
+		done := make(chan bool, 1)
+		copy := func(dst io.Writer, src io.Reader) {
+			io.Copy(dst, src)
+			done <- true
 		}
-	}
 
-	return srv.Start()
+		go copy(bufio.NewWriter(conn), buf)
+		go copy(buf, bufio.NewReader(conn))
+
+		<-done
+		conn.Close()
+		client.Close()
+		log.Printf("Websocket closed: %s\n", requestURL.String())
+	}()
+
+	return nil
 }
 
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
-	delim := fmt.Sprintf("<[%s:%d]>\n", r.URL, time.Now().UnixNano())
+	srv.runOnce()
 
-	srv.stdout.WriteString(delim)
+	if err := <-srv.ready; err != nil {
+		return err
+	}
+
+	srv.pending.Add(1)
+	defer srv.pending.Done()
+
+	if r.Header.Get("Upgrade") == "websocket" {
+		return srv.serveWebSocket(w, r)
+	}
 
 	req := new(http.Request)
 	*req = *r
 	req.Host = srv.addr
 	req.URL.Host = srv.addr
+	req.Proto = "HTTP/1.1"
+	req.Close = false
+	req.ProtoMajor = 1
+	req.ProtoMinor = 1
 
 	if len(req.URL.Scheme) == 0 {
 		req.URL.Scheme = "http"
@@ -451,7 +695,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	response, err := transport.RoundTrip(req)
 
 	if err != nil {
-		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
+		return fmt.Errorf("%s\n%s\n", err.Error(), srv.stderr.ReadAll())
 	}
 
 	defer response.Body.Close()
@@ -465,8 +709,9 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	w.WriteHeader(response.StatusCode)
-	if _, err := io.Copy(w, response.Body); err != nil {
-		return fmt.Errorf("%s\n%s", err.Error(), srv.Output(delim))
+	body := response.Body.(io.Reader)
+	if _, err := io.Copy(w, body); err != nil {
+		return fmt.Errorf("%s\n%s\n", err.Error(), srv.stderr.ReadAll())
 	}
 
 	return nil

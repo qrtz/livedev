@@ -7,34 +7,34 @@ import (
 	"time"
 )
 
-type ServerConf struct {
-	Default        bool          `json:"default"`
-	Host           string        `json:"host"`
-	Port           int           `json:"port"`
-	Bin            string        `json:"bin"`
-	Resources      ResourceConf  `json:"resources"`
-	Target         string        `json:"target"`
-	Startup        []string      `json:"startup"`
-	Builder        []string      `json:"builder"`
-	Workspace      string        `json:"workspace"`
-	GOROOT         string        `json:"GOROOT"`
-	GOPATH         []string      `json:"GOPATH"`
-	StartupTimeout time.Duration `json:"startupTimeout"`
+type serverConfig struct {
+	Default        bool           `json:"default"`
+	Host           string         `json:"host"`
+	Port           int            `json:"port"`
+	Bin            string         `json:"bin"`
+	Resources      resourceConfig `json:"resources"`
+	Target         string         `json:"target"`
+	Startup        []string       `json:"startup"`
+	Builder        []string       `json:"builder"`
+	Workspace      string         `json:"workspace"`
+	GoRoot         string         `json:"GOROOT"`
+	GoPath         []string       `json:"GOPATH"`
+	StartupTimeout time.Duration  `json:"startupTimeout"`
 }
 
-type ResourceConf struct {
+type resourceConfig struct {
 	Ignore string   `json:"ignore"`
 	Paths  []string `json:"paths"`
 }
 
-type Config struct {
-	Port   int          `json:"port"` //proxy port
-	GOROOT string       `json:"GOROOT"`
-	GOPATH []string     `json:"GOPATH"`
-	Server []ServerConf `json:"server"`
+type config struct {
+	Port    int            `json:"port"` //proxy port
+	GoRoot  string         `json:"GOROOT"`
+	GoPath  []string       `json:"GOPATH"`
+	Servers []serverConfig `json:"server"`
 }
 
-func LoadConfig(configFile string) (*Config, error) {
+func loadConfig(configFile string) (*config, error) {
 	r, err := os.Open(configFile)
 
 	if err != nil {
@@ -43,7 +43,7 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	defer r.Close()
 
-	conf := new(Config)
+	conf := new(config)
 
 	dec := json.NewDecoder(r)
 	if err := dec.Decode(&conf); err != nil {

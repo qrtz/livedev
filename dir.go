@@ -1,23 +1,16 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
-	"time"
 )
 
-var (
-	ErrModified = errors.New("modified")
-)
-
-type FileInfo struct {
-	Path string
+type fileInfo struct {
+	path string
 	os.FileInfo
 }
 
-type WalkFunc func(<-chan struct{}, <-chan FileInfo, chan<- error)
+type walkFunc func(<-chan struct{}, <-chan fileInfo, chan<- error)
 
 func walkAll(paths []string, walkFn filepath.WalkFunc) error {
 	for _, path := range paths {
@@ -30,8 +23,8 @@ func walkAll(paths []string, walkFn filepath.WalkFunc) error {
 
 func walk(path string, walkFn filepath.WalkFunc) error {
 	var (
-		stack   []*FileInfo
-		current *FileInfo
+		stack   []*fileInfo
+		current *fileInfo
 	)
 
 	info, err := os.Lstat(path)
@@ -39,25 +32,25 @@ func walk(path string, walkFn filepath.WalkFunc) error {
 		return walkFn(path, info, err)
 	}
 
-	stack = append(stack, &FileInfo{path, info})
+	stack = append(stack, &fileInfo{path, info})
 
 	for pos := len(stack) - 1; pos > -1; pos = len(stack) - 1 {
 		current, stack = stack[pos], stack[:pos]
 
-		if err := walkFn(current.Path, current, nil); err != nil {
+		if err := walkFn(current.path, current, nil); err != nil {
 			if err != filepath.SkipDir {
 				return err
 			}
 			continue
 		}
 
-		infos, _ := readdir(current.Path)
+		infos, _ := readdir(current.path)
 
 		for _, info := range infos {
-			sub := filepath.Join(current.Path, info.Name())
+			sub := filepath.Join(current.path, info.Name())
 
 			if info.IsDir() {
-				stack = append(stack, &FileInfo{sub, info})
+				stack = append(stack, &fileInfo{sub, info})
 			} else if err := walkFn(sub, info, nil); err != nil && err != filepath.SkipDir {
 				return err
 			}
@@ -77,32 +70,4 @@ func readdir(path string) ([]os.FileInfo, error) {
 	defer f.Close()
 
 	return f.Readdir(-1)
-}
-
-func ModifiedSince(since time.Time, ignore *regexp.Regexp, files ...string) (bool, error) {
-	err := walkAll(files, func(path string, info os.FileInfo, err error) error {
-		if ignore != nil && ignore.MatchString(info.Name()) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-
-			return nil
-		}
-
-		if info.ModTime().After(since) {
-			return ErrModified
-		}
-
-		return nil
-	})
-
-	if err == filepath.SkipDir {
-		return false, nil
-	}
-
-	if err == ErrModified {
-		return true, nil
-	}
-
-	return false, err
 }

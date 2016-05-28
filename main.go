@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"go/build"
 	"log"
 	"net"
@@ -27,7 +28,7 @@ func main() {
 		return
 	}
 
-	conf, err := LoadConfig(*configFile)
+	conf, err := loadConfig(*configFile)
 
 	if err != nil {
 		log.Fatal(err)
@@ -37,47 +38,50 @@ func main() {
 		conf.Port = 80
 	}
 
-	if s := strings.TrimSpace(conf.GOROOT); len(s) > 0 {
+	if s := strings.TrimSpace(conf.GoRoot); len(s) > 0 {
+		fmt.Println("GOROOT", conf.GoRoot)
 		if err := os.Setenv(envGoroot, s); err != nil {
 			log.Fatal(err)
 		}
+	} else {
+		conf.GoRoot = os.Getenv(envGoroot)
 	}
 
-	if len(conf.GOPATH) > 0 {
-		p := strings.Join(conf.GOPATH, string(filepath.ListSeparator))
+	if len(conf.GoPath) > 0 {
+		p := strings.Join(conf.GoPath, string(filepath.ListSeparator))
 		if err := os.Setenv(envGopath, p); err != nil {
 			log.Fatal(err)
 		}
+	} else {
+		conf.GoPath = filepath.SplitList(os.Getenv(envGopath))
 	}
 
 	var (
-		GOPATH        = filepath.SplitList(os.Getenv(envGopath))
-		GOROOT        = os.Getenv(envGoroot)
 		servers       = make(map[string]*Server)
 		defaultServer *Server
 	)
 
-	for _, s := range conf.Server {
+	for _, s := range conf.Servers {
 		context := build.Default
-		s.GOROOT = strings.TrimSpace(s.GOROOT)
+		s.GoRoot = strings.TrimSpace(s.GoRoot)
 
-		if len(s.GOROOT) == 0 {
-			s.GOROOT = GOROOT
+		if len(s.GoRoot) == 0 {
+			s.GoRoot = conf.GoRoot
 		}
 
-		if len(s.GOPATH) == 0 {
-			s.GOPATH = GOPATH
+		if len(s.GoPath) == 0 {
+			s.GoPath = conf.GoPath
 		}
 
 		s.Workspace = strings.TrimSpace(s.Workspace)
 
 		if len(s.Workspace) > 0 {
-			s.GOPATH = append(s.GOPATH, s.Workspace)
+			s.GoPath = append(s.GoPath, s.Workspace)
 		}
 
-		context.GOROOT = s.GOROOT
+		context.GOROOT = s.GoRoot
 
-		context.GOPATH = strings.Join(s.GOPATH, string(filepath.ListSeparator))
+		context.GOPATH = strings.Join(s.GoPath, string(filepath.ListSeparator))
 		s.Host = strings.TrimSpace(s.Host)
 
 		if len(s.Host) == 0 {
@@ -102,7 +106,7 @@ func main() {
 		}
 	}
 
-	p := NewProxy(conf.Port, servers, defaultServer)
+	p := newProxy(conf.Port, servers, defaultServer)
 	log.Printf("Proxy: %s\n", net.JoinHostPort("localhost", strconv.Itoa(conf.Port)))
 
 	if err := p.ListenAndServe(); err != nil {
