@@ -23,6 +23,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/qrtz/livedev/env"
+	"github.com/qrtz/livedev/logger"
 )
 
 var (
@@ -44,48 +45,6 @@ func (r Resource) MatchPath(p string) bool {
 	return false
 }
 
-type ErrorLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *ErrorLog) Reset() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.buf.Reset()
-}
-
-func (l *ErrorLog) WriteString(s string) (int, error) {
-	return l.Write([]byte(s))
-}
-
-func (l *ErrorLog) Write(b []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(b)
-}
-
-func (l *ErrorLog) readAll() string {
-	b := make([]byte, l.buf.Len())
-	i, _ := l.buf.Read(b)
-	return string(b[:i])
-}
-
-func (l *ErrorLog) ReadAll() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.readAll()
-}
-
-type Logger struct {
-	prefix string
-}
-
-func (l *Logger) Write(b []byte) (int, error) {
-	log.Println(l.prefix + string(b))
-	return len(b), nil
-}
-
 type Server struct {
 	addr           string
 	bin            string
@@ -100,8 +59,8 @@ type Server struct {
 	startup        []string
 	target         string
 	targetDir      string
-	stdout         *Logger
-	stderr         *ErrorLog
+	stdout         *logger.LogWriter
+	stderr         *logger.BufferedLogWriter
 	startupTimeout time.Duration
 	watcher        *fsnotify.Watcher
 	pending        sync.WaitGroup
@@ -289,8 +248,8 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	srv.port = s.Port
 	srv.startup = s.Startup
 	srv.host = s.Host
-	srv.stdout = &Logger{srv.host + ": "}
-	srv.stderr = new(ErrorLog)
+	srv.stdout = logger.NewLogWriter(os.Stdout, srv.host+"> ", log.LstdFlags)
+	srv.stderr = new(logger.BufferedLogWriter)
 	return srv, nil
 }
 
