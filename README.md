@@ -17,6 +17,7 @@ Features
 * Multiple server support
 * Automated build service.
 * Dependency change detection 
+* Autorealod the page when assets (js, css, image, html...) change
 
 
 Installation
