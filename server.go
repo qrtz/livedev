@@ -21,9 +21,14 @@ import (
 	"syscall"
 	"time"
 
+	//"code.google.com/p/go.net/websocket"
+	"compress/gzip"
+	"crypto/sha1"
+	"encoding/base64"
 	"github.com/fsnotify/fsnotify"
 	"github.com/qrtz/livedev/env"
 	"github.com/qrtz/livedev/logger"
+	"io/ioutil"
 )
 
 var (
@@ -36,6 +41,26 @@ type Resource struct {
 	Paths  map[string]struct{}
 }
 
+func (r Resource) Watch(watcher *fsnotify.Watcher) {
+	for f := range r.Paths {
+		if info, err := os.Lstat(f); err == nil {
+			if info.IsDir() {
+				filepath.Walk(f, func(path string, info os.FileInfo, err error) error {
+					if err == nil && info.IsDir() {
+						if r.Ignore != nil && r.Ignore.MatchString(path) {
+							return filepath.SkipDir
+						}
+						watcher.Add(path)
+					}
+					return nil
+				})
+			} else {
+				watcher.Add(f)
+			}
+		}
+	}
+}
+
 func (r Resource) MatchPath(p string) bool {
 	for f := range r.Paths {
 		if strings.HasPrefix(p, f) {
@@ -43,6 +68,46 @@ func (r Resource) MatchPath(p string) bool {
 		}
 	}
 	return false
+}
+
+type updateListeners struct {
+	mu        sync.Mutex
+	listeners map[chan struct{}]struct{}
+}
+
+func newUpdateListeners() *updateListeners {
+	return &updateListeners{
+		listeners: make(map[chan struct{}]struct{}),
+	}
+}
+
+func (u *updateListeners) register() <-chan struct{} {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	ch := make(chan struct{})
+	u.listeners[ch] = struct{}{}
+	return ch
+}
+
+func (u *updateListeners) remove(ch chan struct{}) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	delete(u.listeners, ch)
+	close(ch)
+}
+
+func (u *updateListeners) notify() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for ch, _ := range u.listeners {
+		select {
+		case ch <- struct{}{}:
+		default:
+			go u.remove(ch)
+		}
+	}
 }
 
 type Server struct {
@@ -55,7 +120,8 @@ type Server struct {
 	dep            map[string]struct{}
 	host           string
 	port           int
-	resources      *Resource
+	resources      Resource
+	assets         Resource
 	startup        []string
 	target         string
 	targetDir      string
@@ -64,6 +130,8 @@ type Server struct {
 	startupTimeout time.Duration
 	watcher        *fsnotify.Watcher
 	pending        sync.WaitGroup
+
+	updateListeners *updateListeners
 
 	busy    chan bool
 	ready   chan error
@@ -151,37 +219,19 @@ func (srv *Server) runOnce() {
 				srv.setError(fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll()))
 			}
 		}
-
-		for f := range srv.resources.Paths {
-			if info, err := os.Lstat(f); err == nil {
-				if info.IsDir() {
-					filepath.Walk(f, func(path string, info os.FileInfo, err error) error {
-						if err == nil && info.IsDir() {
-							if srv.resources.Ignore != nil && srv.resources.Ignore.MatchString(path) {
-								return filepath.SkipDir
-							}
-
-							srv.watcher.Add(path)
-						}
-
-						return nil
-					})
-				} else {
-					srv.watcher.Add(f)
-				}
-			}
-		}
+		srv.resources.Watch(srv.watcher)
+		srv.assets.Watch(srv.watcher)
 	})
 }
 
 func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	var (
 		srv    = new(Server)
-		paths  = make(map[string]struct{})
 		ignore *regexp.Regexp
 	)
 
 	if len(s.Resources.Paths) > 0 {
+		paths := make(map[string]struct{})
 		var v struct{}
 		for _, s := range s.Resources.Paths {
 			if p := strings.TrimSpace(s); len(p) > 0 {
@@ -198,7 +248,29 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 				}
 			}
 
-			srv.resources = &Resource{ignore, paths}
+			srv.resources = Resource{ignore, paths}
+		}
+	}
+
+	if len(s.Assets.Paths) > 0 {
+		paths := make(map[string]struct{})
+		var v struct{}
+		for _, s := range s.Assets.Paths {
+			if p := strings.TrimSpace(s); len(p) > 0 {
+				paths[filepath.Clean(p)] = v
+			}
+		}
+
+		if len(paths) > 0 {
+			if s := strings.TrimSpace(s.Assets.Ignore); len(s) > 0 {
+				if pattern, err := regexp.Compile(s); err == nil {
+					ignore = pattern
+				} else {
+					return nil, errInvalidFilePattern
+				}
+			}
+
+			srv.assets = Resource{ignore, paths}
 		}
 	}
 
@@ -245,6 +317,7 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	srv.started = make(chan bool, 1)
 	srv.done = make(chan error, 1)
 	srv.exit = make(chan bool, 1)
+	srv.updateListeners = newUpdateListeners()
 	srv.port = s.Port
 	srv.startup = s.Startup
 	srv.host = s.Host
@@ -321,6 +394,10 @@ func (srv *Server) Sync(filename string) error {
 
 	restart := rebuild || srv.resources.MatchPath(filename)
 
+	if !restart && !srv.assets.MatchPath(filename) {
+		return nil
+	}
+
 	if restart {
 		err := srv.stop()
 		srv.setError(err)
@@ -345,7 +422,7 @@ func (srv *Server) Sync(filename string) error {
 		}
 		srv.setError(err)
 	}
-
+	go srv.updateListeners.notify()
 	return nil
 }
 
@@ -416,33 +493,27 @@ func (srv *Server) loop() {
 	}
 }
 
-func (srv *Server) stopProcess() error {
+func (srv *Server) stopProcess() (err error) {
 	if srv.cmd != nil {
-		err := srv.cmd.Process.Signal(syscall.SIGTERM)
+		err = srv.cmd.Process.Signal(syscall.SIGTERM)
 
 		if err != nil {
 			err = srv.cmd.Process.Signal(syscall.SIGKILL)
 		}
 
-		if err != nil {
-			log.Println("stopProcess Error:::", err)
-		}
-
 		select {
 		case err = <-srv.done:
 			srv.cmd = nil
-			return err
 		case <-time.After(srv.startupTimeout):
 			err = srv.cmd.Process.Signal(syscall.SIGKILL)
 			if err == nil {
 				err = <-srv.done
 				srv.cmd = nil
 			}
-			return err
 		}
 	}
 
-	return nil
+	return err
 }
 
 func (srv *Server) restart() error {
@@ -573,6 +644,50 @@ func writeWebSocketError(w io.Writer, err error, code int) {
 	b.Flush()
 }
 
+const websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+func generateAcceptKey(key string) string {
+	hash := sha1.New()
+	hash.Write([]byte(key))
+	hash.Write([]byte(websocketGUID))
+	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
+}
+
+func (srv *Server) onUpdate() <-chan struct{} {
+	return srv.updateListeners.register()
+}
+
+func (srv *Server) handleLivedevSocket(w http.ResponseWriter, r *http.Request) error {
+	client, buf, err := w.(http.Hijacker).Hijack()
+
+	if err == nil {
+		go func() {
+			code := http.StatusSwitchingProtocols
+			fmt.Fprintf(buf, "HTTP/1.1 %03d %s\r\n", code, http.StatusText(code))
+			buf.WriteString("Upgrade: websocket\r\n")
+			buf.WriteString("Connection: Upgrade\r\n")
+			fmt.Fprintf(buf, "Sec-WebSocket-Accept: %s\r\n", generateAcceptKey(r.Header.Get("Sec-Websocket-Key")))
+			fmt.Fprintf(buf, "Sec-WebSocket-Protocol: %s\r\n", liveReloadProtocol)
+			buf.WriteString("\r\n")
+			buf.Flush()
+			done := make(chan bool, 1)
+			update := srv.onUpdate()
+
+			go func() {
+				client.Read(make([]byte, 8))
+				done <- true
+			}()
+
+			select {
+			case <-update:
+			case <-done:
+			}
+			client.Close()
+		}()
+	}
+	return err
+}
+
 func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error {
 	client, buf, err := w.(http.Hijacker).Hijack()
 
@@ -630,6 +745,9 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	defer srv.pending.Done()
 
 	if r.Header.Get("Upgrade") == "websocket" {
+		if r.Header.Get("Sec-WebSocket-Protocol") == liveReloadProtocol {
+			return srv.handleLivedevSocket(w, r)
+		}
 		return srv.serveWebSocket(w, r)
 	}
 
@@ -667,8 +785,30 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	w.WriteHeader(response.StatusCode)
 	body := response.Body.(io.Reader)
+
+	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
+		if response.Header.Get("Content-Encoding") == "gzip" {
+			body, err = gzip.NewReader(body)
+			if err != nil {
+				return err
+			}
+		}
+
+		data, err := ioutil.ReadAll(body)
+		if err == nil {
+			data, err = appendHTML(data, []byte(liveReloadHTML))
+		}
+
+		if err != nil {
+			return err
+		}
+
+		wh.Set("Content-Length", strconv.Itoa(len(data)))
+		body = bytes.NewReader(data)
+	}
+
+	w.WriteHeader(response.StatusCode)
 	if _, err := io.Copy(w, body); err != nil {
 		return fmt.Errorf("%s\n%s\n", err.Error(), srv.stderr.ReadAll())
 	}

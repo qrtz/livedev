@@ -1,10 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"html/template"
 )
 
-var errTemplate = template.Must(template.New("error").Parse(`
+var errTemplate = template.Must(template.New("error").Parse(fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en-US" dir="ltr">
 	<head>
@@ -37,8 +38,9 @@ var errTemplate = template.Must(template.New("error").Parse(`
 			{{end}}
 		{{end}}
 		</code>
+		%s
 	</body>
-</html>`))
+</html>`, liveReloadHTML)))
 
 var codeviewerTemplate = template.Must(template.New("codeviewer").Parse(`
 <!DOCTYPE html>

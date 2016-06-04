@@ -45,6 +45,9 @@ livedev is controlled by a json configuration file:
     * __resources__: (optional) A list of resources such as template files. Any change to these files will cause the server to restart.
         * __ignore__: (string, optional) filename pattern to ignore. 
         * __paths__: ([]string) A list of files or directories to monitor
+    * __assets__: (optional) A list of assets such as css, javascript, image files. Any change to these files will cause a page to reload.
+        * __ignore__: (string, optional) filename pattern to ignore.
+        * __paths__: ([]string) A list of files or directories to monitor
     * __bin__: (string, optional) server executable file. When absent, it default to /tmp/livedev[hostname]
     * __builder__: ([]string, optional) To use a builder other than the go build tool. The first element is the command and the rest its arguments
     * __startup__: ([]string, optional) server startup argument list

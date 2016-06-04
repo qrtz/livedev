@@ -13,6 +13,7 @@ type serverConfig struct {
 	Port           int            `json:"port"`
 	Bin            string         `json:"bin"`
 	Resources      resourceConfig `json:"resources"`
+	Assets         resourceConfig `json:"assets"`
 	Target         string         `json:"target"`
 	Startup        []string       `json:"startup"`
 	Builder        []string       `json:"builder"`
