@@ -25,10 +25,11 @@ import (
 	"compress/gzip"
 	"crypto/sha1"
 	"encoding/base64"
+	"io/ioutil"
+
 	"github.com/fsnotify/fsnotify"
 	"github.com/qrtz/livedev/env"
 	"github.com/qrtz/livedev/logger"
-	"io/ioutil"
 )
 
 var (
@@ -101,7 +102,7 @@ func (u *updateListeners) remove(ch chan struct{}) {
 func (u *updateListeners) notify() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	for ch, _ := range u.listeners {
+	for ch := range u.listeners {
 		select {
 		case ch <- struct{}{}:
 		default:
@@ -115,6 +116,7 @@ type Server struct {
 	bin            string
 	builder        []string
 	closed         chan struct{}
+	cmdMu          sync.Mutex
 	cmd            *exec.Cmd
 	context        build.Context
 	dep            map[string]struct{}
@@ -494,25 +496,27 @@ func (srv *Server) loop() {
 }
 
 func (srv *Server) stopProcess() (err error) {
-	if srv.cmd != nil {
-		err = srv.cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case err = <-srv.done:
+		srv.cmd = nil
+	default:
 
-		if err != nil {
-			err = srv.cmd.Process.Signal(syscall.SIGKILL)
-		}
-
-		select {
-		case err = <-srv.done:
-			srv.cmd = nil
-		case <-time.After(srv.startupTimeout):
-			err = srv.cmd.Process.Signal(syscall.SIGKILL)
-			if err == nil {
-				err = <-srv.done
+		if srv.cmd != nil {
+			srv.cmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case err = <-srv.done:
+				log.Println("Signal Error2: ", err)
+				srv.cmd = nil
+			case <-time.After(srv.startupTimeout):
+				srv.cmd.Process.Signal(syscall.SIGKILL)
+				select {
+				case err = <-srv.done:
+				default:
+				}
 				srv.cmd = nil
 			}
 		}
 	}
-
 	return err
 }
 
@@ -553,14 +557,19 @@ func (srv *Server) startProcess() error {
 			log.Println(srv.host, "->", err)
 			select {
 			case srv.stopped <- true:
+				<-srv.stopped
+				err = errors.New("process crashed")
 				// The process crashed or was kill externally
 				// Restart it
 				// TODO: limit the number of consecutive restart
-				<-srv.stopped
-				go srv.restart()
+				if srv.stderr.Len() == 0 {
+					err = nil
+					go srv.restart()
+				}
 			default:
+				err = nil
 			}
-			srv.done <- nil
+			srv.done <- err
 		}()
 
 		return <-srv.testConnection(&url.URL{
@@ -704,7 +713,7 @@ func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error 
 		log.Printf("Websocket error: \n%s\n%s\n", err.Error(), requestURL.String())
 		writeWebSocketError(buf, err, http.StatusInternalServerError)
 		client.Close()
-		return nil
+		return err
 	}
 
 	if err = r.Write(conn); err != nil {

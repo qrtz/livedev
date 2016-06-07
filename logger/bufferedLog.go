@@ -10,6 +10,12 @@ type BufferedLogWriter struct {
 	buf bytes.Buffer
 }
 
+func (l *BufferedLogWriter) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Len()
+}
+
 func (l *BufferedLogWriter) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

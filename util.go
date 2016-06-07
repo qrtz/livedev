@@ -67,7 +67,7 @@ var tags = [][]byte{
 
 func appendHTML(data, code []byte) ([]byte, error) {
 	offset := len(data) - 1
-	DONE:
+DONE:
 	for _, tag := range tags {
 		for ; offset > len(tag) && isWhiteSpace(data[offset]); offset-- {
 		}
@@ -111,4 +111,3 @@ func bytesReverse(b []byte) []byte {
 	}
 	return b
 }
-
