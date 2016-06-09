@@ -219,9 +219,15 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := srv.ServeHTTP(w, r); err != nil {
-		errData := ServerError{Name: "Error"}
-		errData.Data = parseError(append(srv.context.SrcDirs(), srv.targetDir), net.JoinHostPort(srv.host, strconv.Itoa(p.codeViewerMux.Port)), []byte(err.Error()))
-		p.handleError(w, errData, http.StatusInternalServerError)
+		if r.Header.Get("Upgrade") == "websocket" {
+			conn, buf, err := w.(http.Hijacker).Hijack()
+			writeWebSocketError(buf, err, http.StatusInternalServerError)
+			conn.Close()
+		} else {
+			errData := ServerError{Name: "Error"}
+			errData.Data = parseError(append(srv.context.SrcDirs(), srv.targetDir), net.JoinHostPort(srv.host, strconv.Itoa(p.codeViewerMux.Port)), []byte(err.Error()))
+			p.handleError(w, errData, http.StatusInternalServerError)
+		}
 	}
 }
 

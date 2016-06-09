@@ -21,10 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	//"code.google.com/p/go.net/websocket"
 	"compress/gzip"
-	"crypto/sha1"
-	"encoding/base64"
 	"io/ioutil"
 
 	"github.com/fsnotify/fsnotify"
@@ -292,8 +289,8 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	}
 
 	if !HasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
-		//Target is not in the $GOPATH
-		//Try to guess the import root(workspace) from the path
+		// Target is not in the $GOPATH
+		// Try to guess the import root(workspace) from the path
 		roots := ImportRoots(srv.target)
 
 		if len(roots) > 0 {
@@ -541,7 +538,14 @@ func (srv *Server) restart() error {
 }
 
 func (srv *Server) startProcess() error {
+	log.Println("Starting Process: ", srv.addr)
 	ev := env.New(os.Environ())
+
+	// Drain the done channel
+	select {
+	case <-srv.done:
+	default:
+	}
 
 	cmd := exec.Command(srv.bin, srv.startup...)
 	cmd.Env = ev.Data()
@@ -586,7 +590,7 @@ func (srv *Server) startProcess() error {
 func (srv *Server) build() error {
 	log.Printf("Building...%s", srv.host)
 
-	//List of file to pass to "go build"
+	// List of file to pass to "go build"
 	var buildFiles []string
 
 	dep, err := computeDep(&srv.context, srv.target)
@@ -598,7 +602,7 @@ func (srv *Server) build() error {
 		srv.watcher.Remove(f)
 	}
 
-	//Reset the dependency list.
+	// Reset the dependency list.
 	srv.dep = make(map[string]struct{})
 	for _, f := range dep {
 		srv.dep[f] = struct{}{}
@@ -645,23 +649,6 @@ func (srv *Server) build() error {
 	return nil
 }
 
-func writeWebSocketError(w io.Writer, err error, code int) {
-	b := bufio.NewWriter(w)
-	fmt.Fprintf(b, "HTTP/1.1 %03d %s\r\n", code, http.StatusText(code))
-	b.WriteString("\r\n")
-	b.WriteString(err.Error())
-	b.Flush()
-}
-
-const websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-func generateAcceptKey(key string) string {
-	hash := sha1.New()
-	hash.Write([]byte(key))
-	hash.Write([]byte(websocketGUID))
-	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
-}
-
 func (srv *Server) onUpdate() <-chan struct{} {
 	return srv.updateListeners.register()
 }
@@ -670,12 +657,15 @@ func (srv *Server) handleLivedevSocket(w http.ResponseWriter, r *http.Request) e
 	client, buf, err := w.(http.Hijacker).Hijack()
 
 	if err == nil {
+		// For now, no need for a full websocket protocol implementation
+		// We need just enough to maintain the connection
+		// Communicate changes to the caller by just closing the conntection
 		go func() {
 			code := http.StatusSwitchingProtocols
 			fmt.Fprintf(buf, "HTTP/1.1 %03d %s\r\n", code, http.StatusText(code))
 			buf.WriteString("Upgrade: websocket\r\n")
 			buf.WriteString("Connection: Upgrade\r\n")
-			fmt.Fprintf(buf, "Sec-WebSocket-Accept: %s\r\n", generateAcceptKey(r.Header.Get("Sec-Websocket-Key")))
+			fmt.Fprintf(buf, "Sec-WebSocket-Accept: %s\r\n", generateWebsocketAcceptKey(r.Header.Get("Sec-Websocket-Key")))
 			fmt.Fprintf(buf, "Sec-WebSocket-Protocol: %s\r\n", liveReloadProtocol)
 			buf.WriteString("\r\n")
 			buf.Flush()
@@ -683,6 +673,8 @@ func (srv *Server) handleLivedevSocket(w http.ResponseWriter, r *http.Request) e
 			update := srv.onUpdate()
 
 			go func() {
+				// We do not expect any message from the client
+				// Any data indicates a connection closed or a misbehaving client
 				client.Read(make([]byte, 8))
 				done <- true
 			}()
@@ -704,16 +696,16 @@ func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 
+	// We have taken over the connection from this point on. Do not return any error to the caller
 	requestURL := *r.URL
 	requestURL.Host = srv.addr
 
 	conn, err := net.Dial(client.LocalAddr().Network(), requestURL.Host)
 
 	if err != nil {
-		log.Printf("Websocket error: \n%s\n%s\n", err.Error(), requestURL.String())
 		writeWebSocketError(buf, err, http.StatusInternalServerError)
 		client.Close()
-		return err
+		return nil
 	}
 
 	if err = r.Write(conn); err != nil {
@@ -721,7 +713,7 @@ func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error 
 		writeWebSocketError(buf, err, http.StatusInternalServerError)
 		conn.Close()
 		client.Close()
-		return err
+		return nil
 	}
 
 	go func() {
@@ -745,18 +737,24 @@ func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error 
 
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	srv.runOnce()
+	isWS := r.Header.Get("Upgrade") == "websocket"
+	isLiveReload := isWS && r.Header.Get("Sec-WebSocket-Protocol") == liveReloadProtocol
 
 	if err := <-srv.ready; err != nil {
+		if isLiveReload {
+			return srv.handleLivedevSocket(w, r)
+		}
 		return err
+	}
+
+	if isLiveReload {
+		return srv.handleLivedevSocket(w, r)
 	}
 
 	srv.pending.Add(1)
 	defer srv.pending.Done()
 
-	if r.Header.Get("Upgrade") == "websocket" {
-		if r.Header.Get("Sec-WebSocket-Protocol") == liveReloadProtocol {
-			return srv.handleLivedevSocket(w, r)
-		}
+	if isWS {
 		return srv.serveWebSocket(w, r)
 	}
 

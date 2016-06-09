@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,4 +115,21 @@ func bytesReverse(b []byte) []byte {
 		b[i], b[len(b)-i-1] = b[len(b)-i-1], c
 	}
 	return b
+}
+
+func writeWebSocketError(w io.Writer, err error, code int) {
+	b := bufio.NewWriter(w)
+	fmt.Fprintf(b, "HTTP/1.1 %03d %s\r\n", code, http.StatusText(code))
+	b.WriteString("\r\n")
+	b.WriteString(err.Error())
+	b.Flush()
+}
+
+const websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+func generateWebsocketAcceptKey(key string) string {
+	hash := sha1.New()
+	hash.Write([]byte(key))
+	hash.Write([]byte(websocketGUID))
+	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
 }
