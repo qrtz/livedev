@@ -421,7 +421,7 @@ func (srv *Server) Sync(filename string) error {
 		}
 		srv.setError(err)
 	}
-	go srv.updateListeners.notify()
+
 	return nil
 }
 
@@ -464,6 +464,7 @@ func (srv *Server) start() error {
 	}
 
 	log.Println(srv.host, "...Startup completed")
+	go srv.updateListeners.notify()
 	return err
 }
 
@@ -502,14 +503,11 @@ func (srv *Server) stopProcess() (err error) {
 			srv.cmd.Process.Signal(syscall.SIGTERM)
 			select {
 			case err = <-srv.done:
-				log.Println("Signal Error2: ", err)
 				srv.cmd = nil
 			case <-time.After(srv.startupTimeout):
 				srv.cmd.Process.Signal(syscall.SIGKILL)
-				select {
-				case err = <-srv.done:
-				default:
-				}
+				// TODO : We may need to a timeout here
+				err = <-srv.done
 				srv.cmd = nil
 			}
 		}
@@ -540,12 +538,6 @@ func (srv *Server) restart() error {
 func (srv *Server) startProcess() error {
 	log.Println("Starting Process: ", srv.addr)
 	ev := env.New(os.Environ())
-
-	// Drain the done channel
-	select {
-	case <-srv.done:
-	default:
-	}
 
 	cmd := exec.Command(srv.bin, srv.startup...)
 	cmd.Env = ev.Data()
