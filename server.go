@@ -549,8 +549,10 @@ func (srv *Server) startProcess() error {
 		srv.cmd = cmd
 
 		go func() {
-			err := cmd.Wait()
-			log.Println(srv.host, "->", err)
+			var err error
+			status := cmd.Wait()
+
+			log.Println(srv.host, "->", status)
 			select {
 			case srv.stopped <- true:
 				<-srv.stopped
@@ -558,7 +560,7 @@ func (srv *Server) startProcess() error {
 				// The process crashed or was kill externally
 				// Restart it
 				// TODO: limit the number of consecutive restart
-				if srv.stderr.Len() == 0 {
+				if srv.stderr.Len() == 0 || strings.Contains(status.Error(), "terminated") {
 					err = nil
 					go srv.restart()
 				}
