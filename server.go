@@ -420,6 +420,9 @@ func (srv *Server) Sync(filename string) error {
 			err = fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll())
 		}
 		srv.setError(err)
+	} else {
+		// Asset change
+		go srv.updateListeners.notify()
 	}
 
 	return nil
@@ -463,8 +466,8 @@ func (srv *Server) start() error {
 		}
 	}
 
-	log.Println(srv.host, "...Startup completed")
 	go srv.updateListeners.notify()
+	log.Println(srv.host, "...Startup completed")
 	return err
 }
 
@@ -703,7 +706,6 @@ func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error 
 	}
 
 	if err = r.Write(conn); err != nil {
-		log.Printf("Websocket error: \n%s\n%s\n", err.Error(), requestURL.String())
 		writeWebSocketError(buf, err, http.StatusInternalServerError)
 		conn.Close()
 		client.Close()
@@ -723,7 +725,6 @@ func (srv *Server) serveWebSocket(w http.ResponseWriter, r *http.Request) error 
 		<-done
 		conn.Close()
 		client.Close()
-		log.Printf("Websocket closed: %s\n", requestURL.String())
 	}()
 
 	return nil
