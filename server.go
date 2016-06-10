@@ -52,9 +52,8 @@ func (r Resource) Watch(watcher *fsnotify.Watcher) {
 					}
 					return nil
 				})
-			} else {
-				watcher.Add(f)
 			}
+			watcher.Add(f)
 		}
 	}
 }
@@ -224,12 +223,10 @@ func (srv *Server) runOnce() {
 }
 
 func NewServer(context build.Context, s serverConfig) (*Server, error) {
-	var (
-		srv    = new(Server)
-		ignore *regexp.Regexp
-	)
+	srv := new(Server)
 
 	if len(s.Resources.Paths) > 0 {
+		var ignore *regexp.Regexp
 		paths := make(map[string]struct{})
 		var v struct{}
 		for _, s := range s.Resources.Paths {
@@ -252,6 +249,7 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	}
 
 	if len(s.Assets.Paths) > 0 {
+		var ignore *regexp.Regexp
 		paths := make(map[string]struct{})
 		var v struct{}
 		for _, s := range s.Assets.Paths {
@@ -385,7 +383,12 @@ func (srv *Server) Shutdown() error {
 
 func (srv *Server) Sync(filename string) error {
 	srv.busy <- true
+	var notifyUpdate bool
+
 	defer func() {
+		if notifyUpdate {
+			go srv.updateListeners.notify()
+		}
 		srv.started <- <-srv.busy
 	}()
 
@@ -405,6 +408,8 @@ func (srv *Server) Sync(filename string) error {
 		}
 	}
 
+	notifyUpdate = true
+
 	if rebuild {
 		err := srv.build()
 		srv.setError(err)
@@ -418,11 +423,10 @@ func (srv *Server) Sync(filename string) error {
 		err := srv.start()
 		if err != nil {
 			err = fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll())
+		} else {
+			notifyUpdate = false
 		}
 		srv.setError(err)
-	} else {
-		// Asset change
-		go srv.updateListeners.notify()
 	}
 
 	return nil
