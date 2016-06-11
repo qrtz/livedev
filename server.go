@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,15 @@ import (
 var (
 	errTimeout            = errors.New("Timeout:Gaving up")
 	errInvalidFilePattern = errors.New("Invalid file pattern")
+)
+
+type processState uint32
+
+const (
+	created processState = iota
+	running
+	stopping
+	exited
 )
 
 type Resource struct {
@@ -112,8 +122,6 @@ type Server struct {
 	bin            string
 	builder        []string
 	closed         chan struct{}
-	cmdMu          sync.Mutex
-	cmd            *exec.Cmd
 	context        build.Context
 	dep            map[string]struct{}
 	host           string
@@ -142,6 +150,17 @@ type Server struct {
 	error error
 
 	once sync.Once
+
+	cmd          *exec.Cmd
+	processState uint32
+}
+
+func (srv *Server) setProcessState(state processState) {
+	atomic.StoreUint32(&srv.processState, uint32(state))
+}
+
+func (srv *Server) getProcessState() processState {
+	return processState(atomic.LoadUint32(&srv.processState))
 }
 
 func (srv *Server) setError(err error) {
@@ -326,6 +345,7 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 func (srv *Server) testConnection(target *url.URL, timeout time.Duration) <-chan error {
 	t := time.After(timeout)
 	done := make(chan error, 1)
+	client := &http.Client{}
 	go func() {
 		for {
 			select {
@@ -336,7 +356,7 @@ func (srv *Server) testConnection(target *url.URL, timeout time.Duration) <-chan
 				done <- errTimeout
 				return
 			default:
-				response, err := http.Head(target.String())
+				response, err := client.Head(target.String())
 				if err == nil {
 					response.Body.Close()
 					done <- nil
@@ -345,6 +365,11 @@ func (srv *Server) testConnection(target *url.URL, timeout time.Duration) <-chan
 
 				if t, ok := err.(*url.Error); ok && t.Err == io.EOF {
 					// The server started successfully but
+					done <- nil
+					return
+				}
+
+				if srv.getProcessState() != running {
 					done <- nil
 					return
 				}
@@ -383,7 +408,7 @@ func (srv *Server) Shutdown() error {
 
 func (srv *Server) Sync(filename string) error {
 	srv.busy <- true
-	var notifyUpdate bool
+	notifyUpdate := true
 
 	defer func() {
 		if notifyUpdate {
@@ -408,8 +433,6 @@ func (srv *Server) Sync(filename string) error {
 		}
 	}
 
-	notifyUpdate = true
-
 	if rebuild {
 		err := srv.build()
 		srv.setError(err)
@@ -420,11 +443,11 @@ func (srv *Server) Sync(filename string) error {
 	}
 
 	if restart {
+		// Let start handle the notification
+		notifyUpdate = false
 		err := srv.start()
 		if err != nil {
 			err = fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll())
-		} else {
-			notifyUpdate = false
 		}
 		srv.setError(err)
 	}
@@ -434,6 +457,7 @@ func (srv *Server) Sync(filename string) error {
 
 func (srv *Server) start() error {
 	log.Printf("Starting...%s", srv.host)
+	defer srv.updateListeners.notify()
 
 	generatePort := srv.port == 0
 
@@ -470,7 +494,6 @@ func (srv *Server) start() error {
 		}
 	}
 
-	go srv.updateListeners.notify()
 	log.Println(srv.host, "...Startup completed")
 	return err
 }
@@ -501,24 +524,35 @@ func (srv *Server) loop() {
 }
 
 func (srv *Server) stopProcess() (err error) {
+	log.Println("Stopping process")
 	select {
 	case err = <-srv.done:
-		srv.cmd = nil
+		log.Println("Process already stopped")
 	default:
-
-		if srv.cmd != nil {
+		if srv.getProcessState() == running {
+			srv.setProcessState(stopping)
 			srv.cmd.Process.Signal(syscall.SIGTERM)
 			select {
 			case err = <-srv.done:
-				srv.cmd = nil
 			case <-time.After(srv.startupTimeout):
 				srv.cmd.Process.Signal(syscall.SIGKILL)
-				// TODO : We may need to a timeout here
+				// TODO : We may need to set a timeout here
 				err = <-srv.done
-				srv.cmd = nil
 			}
 		}
 	}
+	return err
+}
+
+func (srv *Server) halt() error {
+	srv.busy <- true
+	defer func() {
+		srv.updateListeners.notify()
+		srv.started <- <-srv.busy
+	}()
+
+	err := srv.stop()
+	srv.setError(err)
 	return err
 }
 
@@ -544,6 +578,7 @@ func (srv *Server) restart() error {
 
 func (srv *Server) startProcess() error {
 	log.Println("Starting Process: ", srv.addr)
+	srv.setProcessState(created)
 	ev := env.New(os.Environ())
 
 	cmd := exec.Command(srv.bin, srv.startup...)
@@ -553,37 +588,35 @@ func (srv *Server) startProcess() error {
 
 	err := cmd.Start()
 	if err == nil {
+		srv.setProcessState(running)
 		srv.cmd = cmd
 
 		go func() {
-			var err error
 			status := cmd.Wait()
 
 			log.Println(srv.host, "->", status)
-			select {
-			case srv.stopped <- true:
-				<-srv.stopped
-				err = errors.New("process crashed")
+			srv.done <- nil
+			oldState := srv.getProcessState()
+			srv.setProcessState(exited)
+
+			if oldState == running {
 				// The process crashed or was kill externally
 				// Restart it
 				// TODO: limit the number of consecutive restart
 				if srv.stderr.Len() == 0 || strings.Contains(status.Error(), "terminated") {
-					err = nil
 					go srv.restart()
+				} else {
+					go srv.halt()
 				}
-			default:
-				err = nil
 			}
-			srv.done <- err
 		}()
 
-		return <-srv.testConnection(&url.URL{
+		err = <-srv.testConnection(&url.URL{
 			Host:   srv.addr,
 			Scheme: "http",
 			Path:   "/",
 		}, srv.startupTimeout*time.Second)
 	}
-	srv.done <- err
 	return err
 
 }
