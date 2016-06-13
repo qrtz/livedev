@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -108,6 +109,13 @@ func main() {
 
 	p := newProxy(conf.Port, servers, defaultServer)
 	log.Printf("Proxy: %s\n", net.JoinHostPort("localhost", strconv.Itoa(conf.Port)))
+
+	exit := make(chan os.Signal, 1)
+	signal.Notify(exit, os.Interrupt, os.Kill)
+	go func() {
+		<-exit
+		p.shutdown()
+	}()
 
 	if err := p.ListenAndServe(); err != nil {
 		log.Fatalf("Fatal error: %v", err)

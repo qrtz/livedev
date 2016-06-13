@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/qrtz/livedev/gosource"
 )
@@ -231,6 +233,19 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *proxy) shutdown() {
+	var wg sync.WaitGroup
+	for _, srv := range p.servers {
+		wg.Add(1)
+		go func(s *Server) {
+			defer wg.Done()
+			s.shutdown()
+		}(srv)
+	}
+	wg.Wait()
+	os.Exit(0)
+}
+
 func (p *proxy) ListenAndServe() error {
 	addr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort("", strconv.Itoa(p.port)))
 	if err != nil {
@@ -260,9 +275,6 @@ func (p *proxy) ListenAndServe() error {
 
 	err = <-done
 
-	for _, s := range p.servers {
-		go s.Shutdown()
-	}
-
+	p.shutdown()
 	return err
 }

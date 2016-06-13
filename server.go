@@ -49,7 +49,31 @@ type Resource struct {
 	Paths  map[string]struct{}
 }
 
-func (r Resource) Watch(watcher *fsnotify.Watcher) {
+type fileWatcher struct {
+	*fsnotify.Watcher
+
+	mu       sync.RWMutex
+	isClosed bool
+}
+
+func (w *fileWatcher) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.isClosed {
+		return nil
+	}
+	w.isClosed = true
+	return w.Watcher.Close()
+}
+
+func (w *fileWatcher) IsClosed() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.isClosed
+
+}
+
+func (r Resource) Watch(watcher *fileWatcher) {
 	for f := range r.Paths {
 		if info, err := os.Lstat(f); err == nil {
 			if info.IsDir() {
@@ -134,7 +158,7 @@ type Server struct {
 	stdout         *logger.LogWriter
 	stderr         *logger.BufferedLogWriter
 	startupTimeout time.Duration
-	watcher        *fsnotify.Watcher
+	watcher        *fileWatcher
 	pending        sync.WaitGroup
 
 	updateListeners *updateListeners
@@ -182,7 +206,7 @@ func (srv *Server) startWatcher() error {
 		return err
 	}
 
-	srv.watcher = watcher
+	srv.watcher = &fileWatcher{Watcher: watcher}
 
 	go func() {
 		var mu sync.Mutex
@@ -204,7 +228,10 @@ func (srv *Server) startWatcher() error {
 				}
 				mu.Unlock()
 			case err := <-srv.watcher.Errors:
-				log.Println("Watcher error:", err)
+				log.Println("Watcher error:", err, srv.watcher.IsClosed())
+				if srv.watcher.IsClosed() {
+					return
+				}
 			}
 		}
 	}()
@@ -382,6 +409,18 @@ func (srv *Server) testConnection(target *url.URL, timeout time.Duration) <-chan
 	return done
 }
 
+func (srv *Server) stopAndNotify() error {
+	srv.busy <- true
+	defer func() {
+		srv.updateListeners.notify()
+		srv.started <- <-srv.busy
+	}()
+
+	err := srv.stop()
+	srv.setError(err)
+	return err
+}
+
 func (srv *Server) stop() error {
 	log.Printf("Stopping...%s:%v", srv.host, srv.port)
 	select {
@@ -394,7 +433,13 @@ func (srv *Server) stop() error {
 	return nil
 }
 
-func (srv *Server) Shutdown() error {
+func (srv *Server) shutdown() error {
+	srv.busy <- true
+	log.Println("shuting down: ", srv.host)
+	defer func() {
+		srv.started <- <-srv.busy
+	}()
+
 	select {
 	case srv.exit <- true:
 		if srv.watcher != nil {
@@ -544,18 +589,6 @@ func (srv *Server) stopProcess() (err error) {
 	return err
 }
 
-func (srv *Server) halt() error {
-	srv.busy <- true
-	defer func() {
-		srv.updateListeners.notify()
-		srv.started <- <-srv.busy
-	}()
-
-	err := srv.stop()
-	srv.setError(err)
-	return err
-}
-
 func (srv *Server) restart() error {
 	srv.busy <- true
 	defer func() {
@@ -598,16 +631,20 @@ func (srv *Server) startProcess() error {
 			srv.done <- nil
 			oldState := srv.getProcessState()
 			srv.setProcessState(exited)
-
-			if oldState == running {
-				// The process crashed or was kill externally
-				// Restart it
-				// TODO: limit the number of consecutive restart
-				if srv.stderr.Len() == 0 || strings.Contains(status.Error(), "terminated") {
-					go srv.restart()
-				} else {
-					go srv.halt()
+			select {
+			case srv.busy <- true:
+				if oldState == running {
+					// The process crashed or was kill externally
+					// Restart it
+					// TODO: limit the number of consecutive restart
+					if srv.stderr.Len() == 0 || strings.Contains(status.Error(), "terminated") {
+						go srv.restart()
+					} else {
+						go srv.stopAndNotify()
+					}
 				}
+				<-srv.busy
+			default:
 			}
 		}()
 
