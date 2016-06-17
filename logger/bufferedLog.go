@@ -17,7 +17,7 @@ func (l *BufferedLogWriter) Len() int {
 	return l.buf.Len()
 }
 
-// Reset resets the buffer to empty 
+// Reset resets the buffer to empty
 func (l *BufferedLogWriter) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
