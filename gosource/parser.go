@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Parse parses a single Go source file into a slice of Line
 func Parse(filename string) ([]*Line, error) {
 
 	r, err := os.Open(filename)
@@ -15,6 +16,7 @@ func Parse(filename string) ([]*Line, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer r.Close()
 
 	src, err := ioutil.ReadAll(r)
 	if err != nil {
@@ -248,16 +250,19 @@ var tokens = map[token.Token]string{
 	token.VAR:    "var",
 }
 
+// Line represents a line
 type Line struct {
 	Num    int
 	Tokens []Token
 	offset int
 }
 
+// Add appends a token to the line.
 func (l *Line) Add(t Token) {
 	l.Tokens = append(l.Tokens, t)
 }
 
+// Token represents a token in a line
 type Token struct {
 	Name, Text, Kind string
 	Line             int

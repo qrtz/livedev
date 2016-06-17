@@ -7,16 +7,18 @@ import (
 
 const pathListSeparator = string(os.PathListSeparator)
 
+// Env represents an environment.
 type Env struct {
 	keys map[string]int
 	data []string
 	lock sync.Mutex
 }
 
+// New returns a new environment filled with initial data.
 func New(data []string) *Env {
 	env := &Env{
 		keys: make(map[string]int),
-		data: data,
+		data: data[:],
 	}
 	return env.fillkeys()
 }
@@ -37,6 +39,7 @@ func (env *Env) fillkeys() *Env {
 	return env
 }
 
+// Add adds to the values of the environment variable named by the key.
 func (env *Env) Add(key, val string) {
 	env.lock.Lock()
 	defer env.lock.Unlock()
@@ -50,6 +53,7 @@ func (env *Env) Add(key, val string) {
 	env.data = append(env.data, key+"="+val)
 }
 
+// Set sets the value of the environment variable named by the key.
 func (env *Env) Set(key, val string) {
 	env.lock.Lock()
 	defer env.lock.Unlock()
@@ -64,6 +68,7 @@ func (env *Env) Set(key, val string) {
 	env.data = append(env.data, v)
 }
 
+// Data returns a copy of the slice representing the environment.
 func (env *Env) Data() []string {
-	return env.data
+	return env.data[:]
 }
