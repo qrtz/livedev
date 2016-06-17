@@ -18,8 +18,13 @@ type Env struct {
 func New(data []string) *Env {
 	env := &Env{
 		keys: make(map[string]int),
-		data: data[:],
 	}
+
+	if len(data) > 0 {
+		env.data = make([]string, len(data))
+		copy(env.data, data)
+	}
+
 	return env.fillkeys()
 }
 
@@ -70,5 +75,5 @@ func (env *Env) Set(key, val string) {
 
 // Data returns a copy of the slice representing the environment.
 func (env *Env) Data() []string {
-	return env.data[:]
+	return env.data
 }
