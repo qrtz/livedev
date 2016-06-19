@@ -109,7 +109,7 @@ func parseError(gopaths []string, prefix string, err []byte) (lines []Node) {
 	return lines
 }
 
-func LastIndexOf(s string, b byte) int {
+func lastIndexOf(s string, b byte) int {
 	for i := len(s) - 1; i > 0; i-- {
 		if s[i] == b {
 			return i
@@ -118,8 +118,8 @@ func LastIndexOf(s string, b byte) int {
 	return -1
 }
 
-func SplitPathLine(path string) (string, int64, error) {
-	if i := LastIndexOf(path, ':'); i >= 0 {
+func splitPathLine(path string) (string, int64, error) {
+	if i := lastIndexOf(path, ':'); i >= 0 {
 		line, err := strconv.ParseInt(path[i+1:], 10, 32)
 		return path[:i], line, err
 	}
@@ -148,7 +148,7 @@ func codeViewer(servers map[string]*Server) *serveMux {
 			return
 		}
 
-		path, line, err := SplitPathLine(r.URL.Path[1:])
+		path, line, err := splitPathLine(r.URL.Path[1:])
 
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)

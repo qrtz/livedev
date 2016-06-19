@@ -8,19 +8,20 @@ import (
 )
 
 type serverConfig struct {
-	Default        bool           `json:"default"`
-	Host           string         `json:"host"`
-	Port           int            `json:"port"`
-	Bin            string         `json:"bin"`
-	Resources      resourceConfig `json:"resources"`
-	Assets         resourceConfig `json:"assets"`
-	Target         string         `json:"target"`
-	Startup        []string       `json:"startup"`
-	Builder        []string       `json:"builder"`
-	Workspace      string         `json:"workspace"`
-	GoRoot         string         `json:"GOROOT"`
-	GoPath         []string       `json:"GOPATH"`
-	StartupTimeout time.Duration  `json:"startupTimeout"`
+	Default        bool              `json:"default"`
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Bin            string            `json:"bin"`
+	Resources      resourceConfig    `json:"resources"`
+	Assets         resourceConfig    `json:"assets"`
+	Target         string            `json:"target"`
+	Startup        []string          `json:"startup"`
+	Builder        []string          `json:"builder"`
+	Workspace      string            `json:"workspace"`
+	GoRoot         string            `json:"GOROOT"`
+	GoPath         []string          `json:"GOPATH"`
+	StartupTimeout time.Duration     `json:"startupTimeout"`
+	Env            map[string]string `json:"env"`
 }
 
 type resourceConfig struct {

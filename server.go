@@ -73,6 +73,7 @@ func (w *fileWatcher) IsClosed() bool {
 
 }
 
+// Watch adds Resource files and directories to the given watcher
 func (r Resource) Watch(watcher *fileWatcher) {
 	for f := range r.Paths {
 		if info, err := os.Lstat(f); err == nil {
@@ -92,6 +93,7 @@ func (r Resource) Watch(watcher *fileWatcher) {
 	}
 }
 
+// MathcPath tests whehere the given string matches any of the resource files
 func (r Resource) MatchPath(p string) bool {
 	for f := range r.Paths {
 		if strings.HasPrefix(p, f) {
@@ -141,6 +143,7 @@ func (u *updateListeners) notify() {
 	}
 }
 
+// Server represents an http server
 type Server struct {
 	addr           string
 	bin            string
@@ -153,6 +156,7 @@ type Server struct {
 	resources      Resource
 	assets         Resource
 	startup        []string
+	env            map[string]string
 	target         string
 	targetDir      string
 	stdout         *logger.LogWriter
@@ -223,7 +227,7 @@ func (srv *Server) startWatcher() error {
 					}
 
 					timer = time.AfterFunc(1*time.Second, func() {
-						srv.Sync(event.Name)
+						srv.sync(event.Name)
 					})
 				}
 				mu.Unlock()
@@ -268,7 +272,7 @@ func (srv *Server) runOnce() {
 	})
 }
 
-func NewServer(context build.Context, s serverConfig) (*Server, error) {
+func newServer(context build.Context, s serverConfig) (*Server, error) {
 	srv := new(Server)
 
 	if len(s.Resources.Paths) > 0 {
@@ -322,7 +326,7 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 	if srv.startupTimeout == 0 {
 		srv.startupTimeout = 10
 	}
-
+	srv.env = s.Env
 	srv.target = strings.TrimSpace(s.Target)
 	srv.targetDir = filepath.Dir(s.Target)
 	srv.bin = strings.TrimSpace(s.Bin)
@@ -332,10 +336,10 @@ func NewServer(context build.Context, s serverConfig) (*Server, error) {
 		srv.bin = filepath.Join(os.TempDir(), "livedev-"+s.Host)
 	}
 
-	if !HasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
+	if !hasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
 		// Target is not in the $GOPATH
 		// Try to guess the import root(workspace) from the path
-		roots := ImportRoots(srv.target)
+		roots := importRoots(srv.target)
 
 		if len(roots) > 0 {
 			context.GOPATH = strings.Join(append(roots, context.GOPATH), string(filepath.ListSeparator))
@@ -451,7 +455,7 @@ func (srv *Server) shutdown() error {
 	}
 }
 
-func (srv *Server) Sync(filename string) error {
+func (srv *Server) sync(filename string) error {
 	srv.busy <- true
 	notifyUpdate := true
 
@@ -613,6 +617,9 @@ func (srv *Server) startProcess() error {
 	log.Println("Starting Process: ", srv.addr)
 	srv.setProcessState(created)
 	ev := env.New(os.Environ())
+	for key, value := range srv.env {
+		ev.Add(key, value)
+	}
 
 	cmd := exec.Command(srv.bin, srv.startup...)
 	cmd.Env = ev.Data()

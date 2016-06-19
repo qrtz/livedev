@@ -2,6 +2,7 @@ package env
 
 import (
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -45,32 +46,43 @@ func (env *Env) fillkeys() *Env {
 }
 
 // Add adds to the values of the environment variable named by the key.
-func (env *Env) Add(key, val string) {
+func (env *Env) Add(key string, values ...string) {
 	env.lock.Lock()
 	defer env.lock.Unlock()
 
-	if i, ok := env.keys[key]; ok {
-		env.data[i] += pathListSeparator + val
-		return
-	}
+	value := strings.Join(values, pathListSeparator)
 
-	env.keys[key] = len(env.data)
-	env.data = append(env.data, key+"="+val)
+	if i, ok := env.keys[key]; ok {
+		env.data[i] += value
+	} else {
+		env.keys[key] = len(env.data)
+		env.data = append(env.data, key+"="+value)
+	}
 }
 
 // Set sets the value of the environment variable named by the key.
-func (env *Env) Set(key, val string) {
+func (env *Env) Set(key string, values ...string) {
 	env.lock.Lock()
 	defer env.lock.Unlock()
 
-	v := key + "=" + val
-	if i, ok := env.keys[key]; ok {
-		env.data[i] = v
-		return
-	}
+	value := key + "=" + strings.Join(values, pathListSeparator)
 
-	env.keys[key] = len(env.data)
-	env.data = append(env.data, v)
+	if i, ok := env.keys[key]; ok {
+		env.data[i] = value
+	} else {
+		env.keys[key] = len(env.data)
+		env.data = append(env.data, value)
+	}
+}
+
+// Get retreives the value of the environment variable named by the given key. The return value will be
+// an empty string if the key is not present
+func (env *Env) Get(key string) (value string) {
+	if i, ok := env.keys[key]; ok {
+		value = env.data[i]
+		return value[strings.Index(value, "=")+1:]
+	}
+	return value
 }
 
 // Data returns a copy of the slice representing the environment.

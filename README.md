@@ -43,6 +43,7 @@ livedev is controlled by a json configuration file:
     * __target__: (string, optional) Build target. The file that contains the main function.  
  if __target__ is not in the GOPATH, livedev will attempt to add it by guessing the workspace from the filename.  
  When __target__ is ommited, the build step is skipped.
+    * __env__: (map, optional) A map of key value pairs to set as environment variables on the server.
     * __resources__: (optional) A list of resources such as template files. Any change to these files will cause the server to restart.
         * __ignore__: (string, optional) filename pattern to ignore. 
         * __paths__: ([]string) A list of files or directories to monitor
