@@ -75,7 +75,7 @@ func (env *Env) Set(key string, values ...string) {
 	}
 }
 
-// Get retreives the value of the environment variable named by the given key. The return value will be
+// Get retrieves the value of the environment variable named by the given key. The return value will be
 // an empty string if the key is not present
 func (env *Env) Get(key string) (value string) {
 	if i, ok := env.keys[key]; ok {
@@ -88,4 +88,9 @@ func (env *Env) Get(key string) (value string) {
 // Data returns a copy of the slice representing the environment.
 func (env *Env) Data() []string {
 	return env.data
+}
+
+// String return the string representation of Env data
+func (env *Env) String() string {
+	return strings.Join(env.Data(), "\n")
 }
