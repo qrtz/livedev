@@ -115,9 +115,8 @@ func main() {
 	go func() {
 		<-exit
 		p.shutdown()
+		os.Exit(0)
 	}()
 
-	if err := p.ListenAndServe(); err != nil {
-		log.Fatalf("Fatal error: %v", err)
-	}
+	fmt.Println("Exit Status: ", p.ListenAndServe())
 }

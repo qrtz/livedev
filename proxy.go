@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -243,7 +242,6 @@ func (p *proxy) shutdown() {
 		}(srv)
 	}
 	wg.Wait()
-	os.Exit(0)
 }
 
 func (p *proxy) ListenAndServe() error {

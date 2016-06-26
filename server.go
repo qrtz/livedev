@@ -44,9 +44,62 @@ const (
 	exited
 )
 
-type Resource struct {
+type resource struct {
 	Ignore *regexp.Regexp
 	Paths  map[string]struct{}
+}
+
+func newResource(paths []string, ignore string) (*resource, error) {
+
+	rs := &resource{Paths: make(map[string]struct{})}
+
+	if len(paths) > 0 {
+		for _, s := range paths {
+			if p := strings.TrimSpace(s); len(p) > 0 {
+				rs.Paths[filepath.Clean(p)] = struct{}{}
+			}
+		}
+
+		if s := strings.TrimSpace(ignore); len(s) > 0 {
+			pattern, err := regexp.Compile(s)
+			if err != nil {
+				return nil, err
+			}
+			rs.Ignore = pattern
+		}
+	}
+
+	return rs, nil
+}
+
+// Watch adds Resource files and directories to the given watcher
+func (r resource) Watch(watcher *fileWatcher) {
+	for f := range r.Paths {
+		if info, err := os.Lstat(f); err == nil {
+			if info.IsDir() {
+				filepath.Walk(f, func(path string, info os.FileInfo, err error) error {
+					if err == nil && info.IsDir() {
+						if r.Ignore != nil && r.Ignore.MatchString(path) {
+							return filepath.SkipDir
+						}
+						watcher.Add(path)
+					}
+					return nil
+				})
+			}
+			watcher.Add(f)
+		}
+	}
+}
+
+// MathcPath tests whehere the given string matches any of the resource files
+func (r resource) MatchPath(p string) bool {
+	for f := range r.Paths {
+		if strings.HasPrefix(p, f) {
+			return r.Ignore == nil || !r.Ignore.MatchString(p)
+		}
+	}
+	return false
 }
 
 type fileWatcher struct {
@@ -71,36 +124,6 @@ func (w *fileWatcher) IsClosed() bool {
 	defer w.mu.RUnlock()
 	return w.isClosed
 
-}
-
-// Watch adds Resource files and directories to the given watcher
-func (r Resource) Watch(watcher *fileWatcher) {
-	for f := range r.Paths {
-		if info, err := os.Lstat(f); err == nil {
-			if info.IsDir() {
-				filepath.Walk(f, func(path string, info os.FileInfo, err error) error {
-					if err == nil && info.IsDir() {
-						if r.Ignore != nil && r.Ignore.MatchString(path) {
-							return filepath.SkipDir
-						}
-						watcher.Add(path)
-					}
-					return nil
-				})
-			}
-			watcher.Add(f)
-		}
-	}
-}
-
-// MathcPath tests whehere the given string matches any of the resource files
-func (r Resource) MatchPath(p string) bool {
-	for f := range r.Paths {
-		if strings.HasPrefix(p, f) {
-			return r.Ignore == nil || !r.Ignore.MatchString(p)
-		}
-	}
-	return false
 }
 
 type updateListeners struct {
@@ -153,8 +176,8 @@ type Server struct {
 	dep            map[string]struct{}
 	host           string
 	port           int
-	resources      Resource
-	assets         Resource
+	resources      *resource
+	assets         *resource
 	startup        []string
 	env            map[string]string
 	target         string
@@ -273,52 +296,19 @@ func (srv *Server) runOnce() {
 }
 
 func newServer(context build.Context, s serverConfig) (*Server, error) {
+	var err error
 	srv := new(Server)
 
-	if len(s.Resources.Paths) > 0 {
-		var ignore *regexp.Regexp
-		paths := make(map[string]struct{})
-		var v struct{}
-		for _, s := range s.Resources.Paths {
-			if p := strings.TrimSpace(s); len(p) > 0 {
-				paths[filepath.Clean(p)] = v
-			}
-		}
+	srv.resources, err = newResource(s.Resources.Paths, s.Resources.Ignore)
 
-		if len(paths) > 0 {
-			if s := strings.TrimSpace(s.Resources.Ignore); len(s) > 0 {
-				if pattern, err := regexp.Compile(s); err == nil {
-					ignore = pattern
-				} else {
-					return nil, errInvalidFilePattern
-				}
-			}
-
-			srv.resources = Resource{ignore, paths}
-		}
+	if err != nil {
+		return nil, err
 	}
 
-	if len(s.Assets.Paths) > 0 {
-		var ignore *regexp.Regexp
-		paths := make(map[string]struct{})
-		var v struct{}
-		for _, s := range s.Assets.Paths {
-			if p := strings.TrimSpace(s); len(p) > 0 {
-				paths[filepath.Clean(p)] = v
-			}
-		}
+	srv.assets, err = newResource(s.Assets.Paths, s.Assets.Ignore)
 
-		if len(paths) > 0 {
-			if s := strings.TrimSpace(s.Assets.Ignore); len(s) > 0 {
-				if pattern, err := regexp.Compile(s); err == nil {
-					ignore = pattern
-				} else {
-					return nil, errInvalidFilePattern
-				}
-			}
-
-			srv.assets = Resource{ignore, paths}
-		}
+	if err != nil {
+		return nil, err
 	}
 
 	srv.startupTimeout = s.StartupTimeout
@@ -441,7 +431,7 @@ func (srv *Server) shutdown() error {
 	srv.busy <- true
 	log.Println("shuting down: ", srv.host)
 	defer func() {
-		srv.started <- <-srv.busy
+		<-srv.busy
 	}()
 
 	select {
@@ -573,7 +563,7 @@ func (srv *Server) loop() {
 }
 
 func (srv *Server) stopProcess() (err error) {
-	log.Println("Stopping process")
+	log.Println("Stopping process", srv.host)
 	select {
 	case err = <-srv.done:
 		log.Println("Process already stopped")
@@ -638,6 +628,7 @@ func (srv *Server) startProcess() error {
 			srv.done <- nil
 			oldState := srv.getProcessState()
 			srv.setProcessState(exited)
+
 			select {
 			case srv.busy <- true:
 				if oldState == running {
