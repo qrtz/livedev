@@ -807,15 +807,14 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	isWS := r.Header.Get("Upgrade") == "websocket"
 	isLiveReload := isWS && r.Header.Get("Sec-WebSocket-Protocol") == liveReloadProtocol
 
-	if err := <-srv.ready; err != nil {
-		if isLiveReload {
-			return srv.handleLivedevSocket(w, r)
-		}
-		return err
-	}
+	err := <-srv.ready
 
 	if isLiveReload {
 		return srv.handleLivedevSocket(w, r)
+	}
+
+	if err != nil {
+		return err
 	}
 
 	srv.pending.Add(1)
@@ -862,24 +861,14 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	body := response.Body.(io.Reader)
 
 	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
-		if response.Header.Get("Content-Encoding") == "gzip" {
-			body, err = gzip.NewReader(body)
-			if err != nil {
-				return err
-			}
-		}
-
-		data, err := ioutil.ReadAll(body)
-		if err == nil {
-			data, err = appendHTML(data, []byte(liveReloadHTML))
-		}
+		var contentLen int
+		body, contentLen, err = appendLiveScript(body, response.Header.Get("Content-Encoding"))
 
 		if err != nil {
 			return err
 		}
 
-		wh.Set("Content-Length", strconv.Itoa(len(data)))
-		body = bytes.NewReader(data)
+		wh.Set("Content-Length", strconv.Itoa(contentLen))
 	}
 
 	w.WriteHeader(response.StatusCode)
@@ -888,4 +877,27 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	return nil
+}
+
+func appendLiveScript(body io.Reader, encoding string) (r io.Reader, i int, err error) {
+	if encoding == "gzip" {
+		r, err = gzip.NewReader(body)
+
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+
+	data, err := ioutil.ReadAll(body)
+
+	if err == nil {
+		data, err = appendHTML(data, []byte(liveReloadHTML))
+	}
+
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return bytes.NewReader(data), len(data), nil
+
 }
