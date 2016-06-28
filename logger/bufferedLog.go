@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+// BufferedLogWriter represents a logging object that generates
+// output to a buffer.
 type BufferedLogWriter struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
