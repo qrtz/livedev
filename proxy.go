@@ -38,15 +38,16 @@ func newProxy(port int, servers map[string]*Server, defaultServer *Server) *prox
 	return p
 }
 
-type StackFrame struct {
-	Line       int64
-	Text, File string
-}
-
+// ServerError represents a server error
 type ServerError struct {
 	Message string
 	Name    string
-	Data    []Node
+	Data    []TextNode
+}
+
+// TextNode represents a text node
+type TextNode struct {
+	Text, Link, Line string
 }
 
 func resolvePath(f string, dirs []string) (dir, path string) {
@@ -63,11 +64,7 @@ func resolvePath(f string, dirs []string) (dir, path string) {
 	return dir, path
 }
 
-type Node struct {
-	Text, Link, Line string
-}
-
-func parseError(gopaths []string, prefix string, err []byte) (lines []Node) {
+func parseError(gopaths []string, prefix string, err []byte) (lines []TextNode) {
 	var b []byte
 	var ln []byte
 	var filename string
@@ -85,11 +82,11 @@ func parseError(gopaths []string, prefix string, err []byte) (lines []Node) {
 				ln = append(ln, c)
 			}
 		case '\n':
-			lines = append(lines, Node{Text: string(append(b, c))})
+			lines = append(lines, TextNode{Text: string(append(b, c))})
 			b = b[:0]
 		default:
 			if len(filename) > 0 {
-				lines = append(lines, Node{Text: string(b), Link: filename, Line: string(ln)})
+				lines = append(lines, TextNode{Text: string(b), Link: filename, Line: string(ln)})
 				b = b[:0]
 				filename = filename[:0]
 				ln = ln[:0]
@@ -102,7 +99,7 @@ func parseError(gopaths []string, prefix string, err []byte) (lines []Node) {
 	}
 
 	if len(b) > 0 {
-		lines = append(lines, Node{Text: string(b)})
+		lines = append(lines, TextNode{Text: string(b)})
 	}
 
 	return lines

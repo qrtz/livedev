@@ -632,7 +632,7 @@ func (srv *Server) startProcess() error {
 			select {
 			case srv.busy <- true:
 				if oldState == running {
-					// The process crashed or was kill externally
+					// The process crashed or was killed externally
 					// Restart it
 					// TODO: limit the number of consecutive restart
 					if srv.stderr.Len() == 0 || strings.Contains(status.Error(), "terminated") {
