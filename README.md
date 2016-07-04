@@ -38,8 +38,6 @@ livedev is controlled by a json configuration file:
     * __host__: (string) server hostname (must be unique)
     * __port__: (int, optional) server port  
  When omitted, the server must accept `addr=<hostname:port>` argument.
-    * __workspace__: (string, optional) The project root. It will be added to the build process GOPATH  
-    If omitted, an atempt will be made to guess it from __target__
     * __target__: (string, optional) Build target. The file that contains the main function.  
  if __target__ is not in the GOPATH, livedev will attempt to add it by guessing the workspace from the filename.  
  When __target__ is ommited, the build step is skipped.

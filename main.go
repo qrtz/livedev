@@ -29,32 +29,22 @@ func main() {
 		return
 	}
 
-	conf, err := loadConfig(*configFile)
+	conf := config{
+		Port:   80,
+		GoRoot: os.Getenv(envGoroot),
+		GoPath: filepath.SplitList(os.Getenv(envGopath)),
+	}
 
-	if err != nil {
+	if err := loadConfig(*configFile, &conf); err != nil {
 		log.Fatal(err)
 	}
 
-	if conf.Port == 0 {
-		conf.Port = 80
+	if err := os.Setenv(envGoroot, conf.GoRoot); err != nil {
+		log.Fatal(err)
 	}
 
-	if s := strings.TrimSpace(conf.GoRoot); len(s) > 0 {
-		fmt.Println("GOROOT", conf.GoRoot)
-		if err := os.Setenv(envGoroot, s); err != nil {
-			log.Fatal(err)
-		}
-	} else {
-		conf.GoRoot = os.Getenv(envGoroot)
-	}
-
-	if len(conf.GoPath) > 0 {
-		p := strings.Join(conf.GoPath, string(filepath.ListSeparator))
-		if err := os.Setenv(envGopath, p); err != nil {
-			log.Fatal(err)
-		}
-	} else {
-		conf.GoPath = filepath.SplitList(os.Getenv(envGopath))
+	if err := os.Setenv(envGopath, strings.Join(conf.GoPath, string(filepath.ListSeparator))); err != nil {
+		log.Fatal(err)
 	}
 
 	var (
@@ -66,28 +56,9 @@ func main() {
 		context := build.Default
 		s.GoRoot = strings.TrimSpace(s.GoRoot)
 
-		if len(s.GoRoot) == 0 {
-			s.GoRoot = conf.GoRoot
-		}
-
-		if len(s.GoPath) == 0 {
-			s.GoPath = conf.GoPath
-		}
-
-		s.Workspace = strings.TrimSpace(s.Workspace)
-
-		if len(s.Workspace) > 0 {
-			s.GoPath = append(s.GoPath, s.Workspace)
-		}
-
 		context.GOROOT = s.GoRoot
 
 		context.GOPATH = strings.Join(s.GoPath, string(filepath.ListSeparator))
-		s.Host = strings.TrimSpace(s.Host)
-
-		if len(s.Host) == 0 {
-			s.Host = "localhost"
-		}
 
 		if _, dup := servers[s.Host]; dup {
 			log.Fatalf(`Fatal error: Duplicate server name "%s"`, s.Host)
