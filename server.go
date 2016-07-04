@@ -102,30 +102,6 @@ func (r resource) MatchPath(p string) bool {
 	return false
 }
 
-type fileWatcher struct {
-	*fsnotify.Watcher
-
-	mu       sync.RWMutex
-	isClosed bool
-}
-
-func (w *fileWatcher) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.isClosed {
-		return nil
-	}
-	w.isClosed = true
-	return w.Watcher.Close()
-}
-
-func (w *fileWatcher) IsClosed() bool {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.isClosed
-
-}
-
 type updateListeners struct {
 	mu        sync.Mutex
 	listeners map[chan struct{}]struct{}
@@ -227,13 +203,13 @@ func (srv *Server) getError() error {
 }
 
 func (srv *Server) startWatcher() error {
-	watcher, err := fsnotify.NewWatcher()
+	watcher, err := newFileWatcher()
 
 	if err != nil {
 		return err
 	}
 
-	srv.watcher = &fileWatcher{Watcher: watcher}
+	srv.watcher = watcher
 
 	go func() {
 		var mu sync.Mutex

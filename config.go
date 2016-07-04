@@ -51,7 +51,9 @@ func (c *config) UnmarshalJSON(data []byte) error {
 		c.GoRoot = conf.GoRoot
 	}
 
-	conf.GoPath = append(c.GoPath, conf.GoPath...)
+	if len(conf.GoPath) == 0 {
+		conf.GoPath = c.GoPath
+	}
 
 	for i := range conf.Servers {
 		s := &conf.Servers[i]
