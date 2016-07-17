@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/qrtz/livedev/watcher"
 )
 
 const (
@@ -46,6 +48,13 @@ func main() {
 	if err := os.Setenv(envGopath, strings.Join(conf.GoPath, string(filepath.ListSeparator))); err != nil {
 		log.Fatal(err)
 	}
+	w, err := watcher.New()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer w.Close()
 
 	var (
 		servers       = make(map[string]*Server)
@@ -64,7 +73,7 @@ func main() {
 			log.Fatalf(`Fatal error: Duplicate server name "%s"`, s.Host)
 		}
 
-		srv, err := newServer(context, s)
+		srv, err := newServer(context, s, w)
 
 		if err != nil {
 			log.Fatalf(`Fatal error: Server binary not found "%s" : %v`, s.Host, err)

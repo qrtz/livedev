@@ -25,9 +25,9 @@ import (
 	"compress/gzip"
 	"io/ioutil"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/qrtz/livedev/env"
 	"github.com/qrtz/livedev/logger"
+	"github.com/qrtz/livedev/watcher"
 )
 
 var (
@@ -73,7 +73,7 @@ func newResource(paths []string, ignore string) (*resource, error) {
 }
 
 // Watch adds Resource files and directories to the given watcher
-func (r resource) Watch(watcher *fileWatcher) {
+func (r resource) Walk(walkFunc func(string) error) {
 	for f := range r.Paths {
 		if info, err := os.Lstat(f); err == nil {
 			if info.IsDir() {
@@ -82,12 +82,14 @@ func (r resource) Watch(watcher *fileWatcher) {
 						if r.Ignore != nil && r.Ignore.MatchString(path) {
 							return filepath.SkipDir
 						}
-						watcher.Add(path)
+						return walkFunc(path)
+
 					}
 					return nil
 				})
+			} else {
+				walkFunc(f)
 			}
-			watcher.Add(f)
 		}
 	}
 }
@@ -161,7 +163,8 @@ type Server struct {
 	stdout         *logger.LogWriter
 	stderr         *logger.BufferedLogWriter
 	startupTimeout time.Duration
-	watcher        *fileWatcher
+	watcher        *watcher.Watcher
+	watcherEvents  chan watcher.Event
 	pending        sync.WaitGroup
 
 	updateListeners *updateListeners
@@ -202,44 +205,41 @@ func (srv *Server) getError() error {
 	return srv.error
 }
 
-func (srv *Server) startWatcher() error {
-	watcher, err := newFileWatcher()
+func (srv *Server) watch(path string) error {
+	return srv.watcher.Add(path, srv.watcherEvents)
+}
 
-	if err != nil {
-		return err
+func (srv *Server) unwatch(path string) error {
+	return srv.watcher.Remove(path, srv.watcherEvents)
+}
+
+func (srv *Server) unwatchAll() error {
+	srv.resources.Walk(srv.unwatch)
+	srv.assets.Walk(srv.unwatch)
+	for p := range srv.dep {
+		srv.unwatch(p)
 	}
-
-	srv.watcher = watcher
-
-	go func() {
-		var mu sync.Mutex
-		var timer *time.Timer
-		for {
-			select {
-			case event := <-srv.watcher.Events:
-				mu.Lock()
-
-				if event.Op&fsnotify.Chmod != fsnotify.Chmod {
-					if timer != nil {
-						timer.Stop()
-						timer = nil
-					}
-
-					timer = time.AfterFunc(1*time.Second, func() {
-						srv.sync(event.Name)
-					})
-				}
-				mu.Unlock()
-			case err := <-srv.watcher.Errors:
-				log.Println("Watcher error:", err, srv.watcher.IsClosed())
-				if srv.watcher.IsClosed() {
-					return
-				}
-			}
-		}
-	}()
-
 	return nil
+}
+
+func (srv *Server) startWatcher() {
+	var mu sync.Mutex
+	var timer *time.Timer
+	for {
+		select {
+		case event := <-srv.watcherEvents:
+			mu.Lock()
+			if timer != nil {
+				timer.Stop()
+				timer = nil
+			}
+
+			timer = time.AfterFunc(1*time.Second, func() {
+				srv.sync(event.Name)
+			})
+			mu.Unlock()
+		}
+	}
 }
 
 func (srv *Server) runOnce() {
@@ -251,12 +251,7 @@ func (srv *Server) runOnce() {
 			<-srv.busy
 		}()
 
-		// TODO: Use only 1 watcher for all servers
-		if err := srv.startWatcher(); err != nil {
-			srv.setError(err)
-			return
-		}
-
+		go srv.startWatcher()
 		err := srv.build()
 		srv.setError(err)
 
@@ -266,12 +261,12 @@ func (srv *Server) runOnce() {
 				srv.setError(fmt.Errorf("%v\nError:%s\n", err, srv.stderr.ReadAll()))
 			}
 		}
-		srv.resources.Watch(srv.watcher)
-		srv.assets.Watch(srv.watcher)
+		srv.resources.Walk(srv.watch)
+		srv.assets.Walk(srv.watch)
 	})
 }
 
-func newServer(context build.Context, s serverConfig) (*Server, error) {
+func newServer(context build.Context, s serverConfig, w *watcher.Watcher) (*Server, error) {
 	var err error
 	srv := new(Server)
 
@@ -324,6 +319,8 @@ func newServer(context build.Context, s serverConfig) (*Server, error) {
 		srv.builder = append(srv.builder, gobin, "build", "-o", srv.bin)
 	}
 
+	srv.watcher = w
+	srv.watcherEvents = make(chan watcher.Event, 1)
 	srv.ready = make(chan error, 1)
 	srv.busy = make(chan bool, 1)
 	srv.stopped = make(chan bool, 1)
@@ -361,7 +358,7 @@ func (srv *Server) testConnection(target *url.URL, timeout time.Duration) <-chan
 				}
 
 				if t, ok := err.(*url.Error); ok && t.Err == io.EOF {
-					// The server started successfully but
+					// The server started successfully but the handler paniced
 					done <- nil
 					return
 				}
@@ -412,9 +409,7 @@ func (srv *Server) shutdown() error {
 
 	select {
 	case srv.exit <- true:
-		if srv.watcher != nil {
-			srv.watcher.Close()
-		}
+		srv.unwatchAll()
 		return srv.stop()
 	default:
 		return nil
@@ -644,14 +639,14 @@ func (srv *Server) build() error {
 	}
 
 	for f := range srv.dep {
-		srv.watcher.Remove(f)
+		srv.unwatch(f)
 	}
 
 	// Reset the dependency list.
 	srv.dep = make(map[string]struct{})
 	for _, f := range dep {
 		srv.dep[f] = struct{}{}
-		if err := srv.watcher.Add(f); err != nil {
+		if err := srv.watch(f); err != nil {
 			return err
 		}
 
