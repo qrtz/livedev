@@ -32,9 +32,10 @@ func main() {
 	}
 
 	conf := config{
-		Port:   80,
-		GoRoot: os.Getenv(envGoroot),
-		GoPath: filepath.SplitList(os.Getenv(envGopath)),
+		Port:           80,
+		GoRoot:         os.Getenv(envGoroot),
+		GoPath:         filepath.SplitList(os.Getenv(envGopath)),
+		StartupTimeout: 10, // Default startup timeout in seconds
 	}
 
 	if err := loadConfig(*configFile, &conf); err != nil {
@@ -63,7 +64,6 @@ func main() {
 
 	for _, s := range conf.Servers {
 		context := build.Default
-		s.GoRoot = strings.TrimSpace(s.GoRoot)
 
 		context.GOROOT = s.GoRoot
 

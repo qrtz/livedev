@@ -45,21 +45,6 @@ func (env *Env) fillkeys() *Env {
 	return env
 }
 
-// Add adds to the values of the environment variable named by the key.
-func (env *Env) Add(key string, values ...string) {
-	env.lock.Lock()
-	defer env.lock.Unlock()
-
-	value := strings.Join(values, pathListSeparator)
-
-	if i, ok := env.keys[key]; ok {
-		env.data[i] += value
-	} else {
-		env.keys[key] = len(env.data)
-		env.data = append(env.data, key+"="+value)
-	}
-}
-
 // Set sets the value of the environment variable named by the key.
 func (env *Env) Set(key string, values ...string) {
 	env.lock.Lock()
@@ -75,13 +60,22 @@ func (env *Env) Set(key string, values ...string) {
 	}
 }
 
+// Find retrieves the value of the environment variable named by the given key. The  second return value
+// indicates whether the key exists or not
+func (env *Env) Find(key string) (value string, found bool) {
+	i, found := env.keys[key]
+	if found {
+		data := env.data[i]
+		value = data[strings.Index(data, "=")+1:]
+	}
+
+	return value, found
+}
+
 // Get retrieves the value of the environment variable named by the given key. The return value will be
 // an empty string if the key is not present
 func (env *Env) Get(key string) (value string) {
-	if i, ok := env.keys[key]; ok {
-		value = env.data[i]
-		return value[strings.Index(value, "=")+1:]
-	}
+	value, _ = env.Find(key)
 	return value
 }
 

@@ -157,7 +157,6 @@ type Server struct {
 	resources      *resource
 	assets         *resource
 	startup        []string
-	env            map[string]string
 	target         string
 	targetDir      string
 	stdout         *logger.LogWriter
@@ -183,6 +182,7 @@ type Server struct {
 
 	cmd          *exec.Cmd
 	processState uint32
+	conf         serverConfig
 }
 
 func (srv *Server) setProcessState(state processState) {
@@ -266,36 +266,29 @@ func (srv *Server) runOnce() {
 	})
 }
 
-func newServer(context build.Context, s serverConfig, w *watcher.Watcher) (*Server, error) {
+func newServer(context build.Context, conf serverConfig, w *watcher.Watcher) (*Server, error) {
 	var err error
 	srv := new(Server)
+	srv.conf = conf
 
-	srv.resources, err = newResource(s.Resources.Paths, s.Resources.Ignore)
-
-	if err != nil {
-		return nil, err
-	}
-
-	srv.assets, err = newResource(s.Assets.Paths, s.Assets.Ignore)
+	srv.resources, err = newResource(conf.Resources.Paths, conf.Resources.Ignore)
 
 	if err != nil {
 		return nil, err
 	}
 
-	srv.startupTimeout = s.StartupTimeout
+	srv.assets, err = newResource(conf.Assets.Paths, conf.Assets.Ignore)
 
-	if srv.startupTimeout == 0 {
-		srv.startupTimeout = 10
+	if err != nil {
+		return nil, err
 	}
-	srv.env = s.Env
-	srv.target = strings.TrimSpace(s.Target)
-	srv.targetDir = filepath.Dir(s.Target)
-	srv.bin = strings.TrimSpace(s.Bin)
-	srv.builder = s.Builder
 
-	if len(srv.bin) == 0 {
-		srv.bin = filepath.Join(os.TempDir(), "livedev-"+s.Host)
-	}
+	srv.startupTimeout = conf.StartupTimeout
+
+	srv.target = strings.TrimSpace(conf.Target)
+	srv.targetDir = filepath.Dir(conf.Target)
+	srv.bin = strings.TrimSpace(conf.Bin)
+	srv.builder = conf.Builder
 
 	if !hasPrefix(srv.target, filepath.SplitList(context.GOPATH)) {
 		// Target is not in the $GOPATH
@@ -328,9 +321,9 @@ func newServer(context build.Context, s serverConfig, w *watcher.Watcher) (*Serv
 	srv.done = make(chan error, 1)
 	srv.exit = make(chan bool, 1)
 	srv.updateListeners = newUpdateListeners()
-	srv.port = s.Port
-	srv.startup = s.Startup
-	srv.host = s.Host
+	srv.port = conf.Port
+	srv.startup = conf.Startup
+	srv.host = conf.Host
 	srv.stdout = logger.NewLogWriter(os.Stdout, srv.host+"> ", log.LstdFlags)
 	srv.stderr = new(logger.BufferedLogWriter)
 	return srv, nil
@@ -469,20 +462,10 @@ func (srv *Server) start() error {
 	log.Printf("Starting...%s", srv.host)
 	defer srv.updateListeners.notify()
 
-	generatePort := srv.port == 0
-
-	if generatePort {
-		addr, err := findAvailablePort()
-
-		if err != nil {
-			return err
-		}
-		srv.port = addr.Port
-	}
-
 	if len(srv.addr) == 0 {
 		srv.addr = net.JoinHostPort(srv.host, strconv.Itoa(srv.port))
 	}
+
 	log.Println(srv.addr)
 
 	if _, err := net.ResolveTCPAddr("tcp", srv.addr); err != nil {
@@ -490,11 +473,6 @@ func (srv *Server) start() error {
 	}
 
 	srv.stderr.Reset()
-
-	// The server must accept "--addr" argument if no port is specified in the configuration
-	if generatePort {
-		srv.startup = append(srv.startup, "--addr", srv.addr)
-	}
 
 	err := srv.startProcess()
 	if err == nil {
@@ -578,8 +556,8 @@ func (srv *Server) startProcess() error {
 	log.Println("Starting Process: ", srv.addr)
 	srv.setProcessState(created)
 	ev := env.New(os.Environ())
-	for key, value := range srv.env {
-		ev.Add(key, value)
+	for key, value := range srv.conf.Env {
+		ev.Set(key, value)
 	}
 
 	cmd := exec.Command(srv.bin, srv.startup...)
@@ -664,7 +642,7 @@ func (srv *Server) build() error {
 
 	cmd := exec.Command(command, args...)
 	cmd.Env = env.Data()
-	cmd.Dir = srv.targetDir
+	cmd.Dir = srv.conf.WorkingDir
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) > 0 {
