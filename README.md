@@ -112,14 +112,14 @@ The server access "host and "port" from the command-line argument as specified i
 packgage main
 
 import (
+    "flag"
     "net"
     "net/http"
-    "flag"
 ) 
 
 func main(){
     host := flag.String("-host", "localhost", "host name")
-    port := flag.String("-port", "8081", "host name")
+    port := flag.String("-port", "8081", "port")
 
     flag.Parse()
 
