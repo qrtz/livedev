@@ -63,10 +63,6 @@ Usage
 ```shell    
 $ livedev -c config.json
 ```
-```shell
-# host file
-127.0.0.1 dev.service1.com dev.service2.com
-```
 
 ### config.json 
 
@@ -103,6 +99,10 @@ $ livedev -c config.json
     }
 
 
+```shell
+# host file
+127.0.0.1 dev.service1.com dev.service2.com
+```
 ## dev.service1.com
 URL: http://dev.service1.com:8080    
 The request is forwarded to http://dev.serviceone.com:8081  
