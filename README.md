@@ -118,8 +118,8 @@ import (
 ) 
 
 func main(){
-    host := flag.String("-host", "localhost", "host name")
-    port := flag.String("-port", "8081", "port")
+    host := flag.String("host", "localhost", "host name")
+    port := flag.String("port", "8081", "port")
 
     flag.Parse()
 
