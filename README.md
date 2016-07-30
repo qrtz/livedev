@@ -149,5 +149,18 @@ func main(){
 }
 ```
 
+Live Reload
+===========
+Livedv uses a deceptively simple protocol to enable live reload.  
+It injects a small inline javascript into HTML pages at the end of the document right before the closing body tag.  
+The script opens a websocket connection and reloads the page once the connection is closed.  
+Live reload events are as follow.
+* Change to go files:  
+Rebuild, Restart the server and close liveReload websocket connections 
+* Change to files listed under "resources" in the configuration:  
+Restart the server and close liveReload websocket connections
+* Change to files listed under "assets" in the configuration:  
+Close liveReload websocket connections  
 
+Closing liveReload connections causes all connected HTML pages to reload.
 
