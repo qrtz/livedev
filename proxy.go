@@ -179,6 +179,14 @@ func (p *proxy) handleError(w http.ResponseWriter, err ServerError, code int) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
+
+	// create template context
+	templateData := make(map[string]interface{})
+	templateData["Name"] = err.Name
+	templateData["Message"] = err.Message
+	templateData["Data"] = err.Data
+	templateData["LiveReloadHTML"] = fmt.Sprintf(liveReloadHTML, p.port)
+
 	errTemplate.Execute(w, err)
 }
 
