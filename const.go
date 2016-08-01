@@ -10,7 +10,7 @@ const (
 	!function (w, c) {
 		try{
 			(new WebSocket('ws://' + w.location.host + '/', 'livedev')).onclose=function(){w.location.reload()}
-		}catch(ex){c.log('Livedev: ', err)}
+		}catch(ex){c.log('Livedev: ', ex)}
 	}(window, window.console||{log:function(){}})
     </script>
 	`
