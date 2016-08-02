@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -185,9 +186,9 @@ func (p *proxy) handleError(w http.ResponseWriter, err ServerError, code int) {
 	templateData["Name"] = err.Name
 	templateData["Message"] = err.Message
 	templateData["Data"] = err.Data
-	templateData["LiveReloadHTML"] = fmt.Sprintf(liveReloadHTML, p.port)
+	templateData["LiveReloadHTML"] = template.HTML(fmt.Sprintf(liveReloadHTML, p.port))
 
-	errTemplate.Execute(w, err)
+	errTemplate.Execute(w, templateData)
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
