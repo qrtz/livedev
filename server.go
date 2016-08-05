@@ -813,10 +813,22 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
 		var contentLen int
-		body, contentLen, err = appendLiveScript(body, response.Header.Get("Content-Encoding"), srv.proxyPort)
+		gzipped := "gzip" == response.Header.Get("Content-Encoding")
+		if gzipped {
+			body, err = gzip.NewReader(body)
+			if err != nil {
+				return err
+			}
+		}
+		body, contentLen, err = appendLiveScript(body, srv.proxyPort)
 
 		if err != nil {
 			return err
+		}
+		if gzipped {
+			gw := gzip.NewWriter(w)
+			defer gw.Close()
+			w = responseWriter{gw, w}
 		}
 
 		wh.Set("Content-Length", strconv.Itoa(contentLen))
@@ -830,16 +842,9 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func appendLiveScript(body io.Reader, encoding string, port int) (r io.Reader, i int, err error) {
-	if encoding == "gzip" {
-		r, err = gzip.NewReader(body)
+func appendLiveScript(reader io.Reader, port int) (io.Reader, int, error) {
 
-		if err != nil {
-			return nil, 0, err
-		}
-	}
-
-	data, err := ioutil.ReadAll(body)
+	data, err := ioutil.ReadAll(reader)
 
 	if err == nil {
 		data, err = appendHTML(data, []byte(fmt.Sprintf(liveReloadHTML, port)))
@@ -851,4 +856,13 @@ func appendLiveScript(body io.Reader, encoding string, port int) (r io.Reader, i
 
 	return bytes.NewReader(data), len(data), nil
 
+}
+
+type responseWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
+
+func (w responseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
 }
