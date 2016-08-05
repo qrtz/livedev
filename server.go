@@ -183,6 +183,7 @@ type Server struct {
 	cmd          *exec.Cmd
 	processState uint32
 	conf         serverConfig
+	proxyPort    int
 }
 
 func (srv *Server) setProcessState(state processState) {
@@ -266,10 +267,11 @@ func (srv *Server) runOnce() {
 	})
 }
 
-func newServer(context build.Context, conf serverConfig, w *watcher.Watcher) (*Server, error) {
+func newServer(context build.Context, conf serverConfig, proxyPort int, w *watcher.Watcher) (*Server, error) {
 	var err error
 	srv := new(Server)
 	srv.conf = conf
+	srv.proxyPort = proxyPort
 
 	srv.resources, err = newResource(conf.Resources.Paths, conf.Resources.Ignore)
 
@@ -811,7 +813,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
 		var contentLen int
-		body, contentLen, err = appendLiveScript(body, response.Header.Get("Content-Encoding"))
+		body, contentLen, err = appendLiveScript(body, response.Header.Get("Content-Encoding"), srv.proxyPort)
 
 		if err != nil {
 			return err
@@ -828,7 +830,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func appendLiveScript(body io.Reader, encoding string) (r io.Reader, i int, err error) {
+func appendLiveScript(body io.Reader, encoding string, port int) (r io.Reader, i int, err error) {
 	if encoding == "gzip" {
 		r, err = gzip.NewReader(body)
 
@@ -840,7 +842,7 @@ func appendLiveScript(body io.Reader, encoding string) (r io.Reader, i int, err 
 	data, err := ioutil.ReadAll(body)
 
 	if err == nil {
-		data, err = appendHTML(data, []byte(liveReloadHTML))
+		data, err = appendHTML(data, []byte(fmt.Sprintf(liveReloadHTML, port)))
 	}
 
 	if err != nil {

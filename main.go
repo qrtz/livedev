@@ -73,7 +73,7 @@ func main() {
 			log.Fatalf(`Fatal error: Duplicate server name "%s"`, s.Host)
 		}
 
-		srv, err := newServer(context, s, w)
+		srv, err := newServer(context, s, conf.Port, w)
 
 		if err != nil {
 			log.Fatalf(`Fatal error: Server binary not found "%s" : %v`, s.Host, err)
