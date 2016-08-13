@@ -847,7 +847,7 @@ func appendLiveScript(reader io.Reader, port int) (io.Reader, int, error) {
 	data, err := ioutil.ReadAll(reader)
 
 	if err == nil {
-		data, err = appendHTML(data, []byte(fmt.Sprintf(liveReloadHTML, port)))
+		data = appendHTML(data, []byte(fmt.Sprintf(liveReloadHTML, port)))
 	}
 
 	if err != nil {

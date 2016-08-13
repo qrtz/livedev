@@ -70,7 +70,7 @@ var tags = [][]byte{
 	bytesReverse([]byte("</BODY>")),
 }
 
-func appendHTML(data, code []byte) ([]byte, error) {
+func appendHTML(data, code []byte) []byte {
 	offset := len(data) - 1
 DONE:
 	for _, tag := range tags {
@@ -89,16 +89,16 @@ DONE:
 					offset = len(data) - 1
 					break DONE
 				}
-				i += 1
+				i++
 			}
 		}
 	}
 
-	if offset < len(data)-1 {
-		offset += 1
+	if offset < len(data) {
+		offset++
 	}
 	data = append(data[:offset], append(code, data[offset:]...)...)
-	return data, nil
+	return data
 }
 
 func isWhiteSpace(b byte) bool {
