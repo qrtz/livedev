@@ -783,6 +783,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	req.Close = false
 	req.ProtoMajor = 1
 	req.ProtoMinor = 1
+	transport := http.DefaultTransport
 
 	if len(req.URL.Scheme) == 0 {
 		req.URL.Scheme = "http"
@@ -792,7 +793,6 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 		req.Header.Set("X-Forwarded-For", ip)
 	}
 
-	transport := new(http.Transport)
 	response, err := transport.RoundTrip(req)
 
 	if err != nil {
